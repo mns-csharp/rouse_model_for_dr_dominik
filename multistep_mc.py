@@ -38,7 +38,9 @@ from .chain import ChainState
 from .energy import EnergyComputer, compute_segment_pair_energy
 from .mc_moves import (propose_segment_move, propose_pivot_move,
                        propose_pivot_move_pooled,
-                       propose_batch_segment_moves, MoveProposal)
+                       propose_batch_pivot_moves,
+                       propose_batch_segment_moves,
+                       propose_batch_segment_moves_fused, MoveProposal)
 from .number_space import NumberSpace
 
 
@@ -46,7 +48,7 @@ from .number_space import NumberSpace
 # Configuration
 # ---------------------------------------------------------------------------
 
-MOVE_SIZE = 10  # Batch size for multistep MC
+MOVE_SIZE = 20  # Batch size for multistep MC (larger = fewer batches = less overhead)
 
 
 class RandPool:
@@ -117,7 +119,9 @@ def _process_batch(proposals, state, energy_comp, positions_flat,
     Sequential mode: computes delta-E individually with cell-list, then
     rank-1 corrections via cell-proximity filtering.
     """
-    B = len(proposals)
+    from .batch_proposal import BatchProposal
+    is_bp = isinstance(proposals, BatchProposal)
+    B = proposals.B if is_bp else len(proposals)
     N = cfg.N
     device = cfg.get_torch_device()
     dtype = cfg.dtype
@@ -125,8 +129,10 @@ def _process_batch(proposals, state, energy_comp, positions_flat,
     rep_e = cfg.repulsive_energy
 
     if cfg.use_batched_mode:
+        from .batch_proposal import BatchProposal
+
         # ── BATCHED PATH: parallel energy matrix computation ──────────
-        # Pre-compute ALL energies in parallel (paper's core optimization).
+        # Pre-compute ALL energies in parallel (Migacz et al.).
         # E_total[i]: proposal i vs stationary system
         # E_mm{00,01,10,11}[i,j]: pairwise segment energies for rank-1
         delta_e, Emm00, Emm01, Emm10, Emm11 = \
@@ -136,30 +142,44 @@ def _process_batch(proposals, state, energy_comp, positions_flat,
         # RandPool: one bulk GPU transfer instead of B individual syncs
         rpool = RandPool(gen, device, dtype, initial_size=B * 2)
 
-        # Sequential acceptance — just reads pre-computed matrix elements
+        is_bp = isinstance(proposals, BatchProposal)
+
+        # Pre-fetch E_mm as Python floats to avoid per-element .item() calls
+        # (each .item() forces GPU→CPU sync at ~16μs)
+        emm00 = Emm00.tolist()
+        emm01 = Emm01.tolist()
+        emm10 = Emm10.tolist()
+        emm11 = Emm11.tolist()
+
+        # Sequential acceptance — reads pre-computed values only
         for i in range(B):
-            if proposals[i].n_moved == 0:
+            nm_i = proposals.n_moved[i] if is_bp else proposals[i].n_moved
+            if nm_i == 0:
                 continue
+
+            mtype = proposals.move_types[i] if is_bp else proposals[i].move_type
 
             accepted = metropolis_accept(delta_e[i], cfg.kBT, gen, device,
                                          dtype, rand_pool=rpool)
-            stats.record(proposals[i].move_type, accepted)
+            stats.record(mtype, accepted)
 
             if not accepted:
                 continue
 
-            state.apply_move(proposals[i].chain_idx, proposals[i].bead_start,
-                             proposals[i].new_positions)
+            if is_bp:
+                ci = proposals.chain_idx[i]
+                bs = proposals.bead_start[i]
+                state.apply_move(ci, bs, proposals.new_pos[i, :nm_i])
+            else:
+                state.apply_move(proposals[i].chain_idx, proposals[i].bead_start,
+                                 proposals[i].new_positions)
 
-            # Rank-1 update: pure scalar reads from pre-computed matrices
+            # Rank-1 update: pure Python float reads from pre-fetched lists
             for j in range(i + 1, B):
-                if proposals[j].n_moved == 0:
+                nm_j = proposals.n_moved[j] if is_bp else proposals[j].n_moved
+                if nm_j == 0:
                     continue
-                e00 = Emm00[i, j].item()
-                e01 = Emm01[i, j].item()
-                e10 = Emm10[i, j].item()
-                e11 = Emm11[i, j].item()
-                correction = (e11 - e01) - (e10 - e00)
+                correction = (emm11[i][j] - emm01[i][j]) - (emm10[i][j] - emm00[i][j])
                 if correction != 0.0:
                     delta_e[j] += correction
 
@@ -298,7 +318,7 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
                              seg_info.seg_local[global_seg]))
 
         if batched:
-            batch_proposals = propose_batch_segment_moves(
+            batch_proposals = propose_batch_segment_moves_fused(
                 state, seg_list, gen, cfg)
         else:
             batch_proposals = [
@@ -310,47 +330,88 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
         _process_batch(batch_proposals, state, energy_comp, positions_flat,
                        gen, cfg, stats, ns)
 
-    # ── Phase 2: Pivot moves (one per chain, sequential) ──────────────
-    # For GPU: run entire pivot loop on CPU to avoid thousands of GPU→CPU
-    # syncs. One bulk transfer at start + end instead of ~3000 syncs.
-    if device.type != 'cpu':
+    # ── Phase 2: Pivot moves ────────────────────────────────────────────
+    # Batched mode: propose pivots in batches of PIVOT_BATCH_SIZE, use
+    # matrix-based energy computation + rank-1 corrections (same as
+    # segment moves). This eliminates hundreds of sequential delta_energy
+    # calls that dominated the pivot phase.
+    #
+    # Sequential mode: one pivot per chain with cell-list delta-E.
+
+    PIVOT_BATCH_SIZE = MOVE_SIZE  # same batch size as segment moves
+
+    if batched:
         from .number_space import NumberSpace as NS
-        ns_cpu = NS(ns.box_size, ns.sigma, device=torch.device('cpu'), dtype=cfg.dtype)
+        from .mc_moves import propose_batch_pivot_moves_fused
 
-        # Transfer positions to CPU once
+        # Work on CPU to avoid GPU→CPU syncs during unwrapping
+        cpu_dev = torch.device('cpu')
+        ns_cpu = NS(ns.box_size, ns.sigma, device=cpu_dev, dtype=cfg.dtype)
+
         positions_cpu = state.positions.detach().cpu()  # [n_chains, N, 3]
-        pf_cpu = positions_cpu.reshape(-1, 3)
-        energy_comp.rebuild_cell_list(pf_cpu)
 
-        # Pre-generate ALL random numbers for pivots (1 GPU transfer)
+        # Pre-generate random numbers for all pivots
         rpool = RandPool(gen, device, cfg.dtype,
                          initial_size=cfg.n_chains * 12)
 
-        for c in range(cfg.n_chains):
-            proposal = propose_pivot_move_pooled(
-                positions_cpu, c, rpool, ns_cpu, cfg, device_out=torch.device('cpu'))
+        # Shuffle chain order for pivot proposals
+        chain_perm = torch.randperm(cfg.n_chains, generator=gen, device=device).tolist()
 
-            if proposal.n_moved == 0:
-                continue
+        # Process pivots in batches with matrix-based energy on GPU
+        for pb_start in range(0, cfg.n_chains, PIVOT_BATCH_SIZE):
+            pb_end = min(pb_start + PIVOT_BATCH_SIZE, cfg.n_chains)
+            batch_chains = chain_perm[pb_start:pb_end]
 
-            delta_e = energy_comp.compute_delta_energy_move(
-                pf_cpu, proposal.chain_idx, proposal.bead_start,
-                proposal.old_positions, proposal.new_positions, N
-            )
+            # Propose all pivots (CPU) and pack into GPU BatchProposal
+            bp = propose_batch_pivot_moves_fused(
+                state, batch_chains, rpool, cfg, ns_cpu, positions_cpu, device)
 
-            accepted = metropolis_accept(delta_e, cfg.kBT, gen, device,
-                                         cfg.dtype, rand_pool=rpool)
-            stats.record('pivot', accepted)
+            # Energy matrices computed on GPU via BatchProposal (no repack)
+            positions_flat = state.get_all_flat()
+            B = bp.B
+            delta_e, Emm00, Emm01, Emm10, Emm11 = \
+                energy_comp.compute_batch_energy_matrices(
+                    positions_flat, bp, N)
 
-            if accepted:
-                bs = proposal.bead_start
-                nm = proposal.n_moved
-                positions_cpu[c, bs:bs + nm] = proposal.new_positions
-                pf_cpu = positions_cpu.reshape(-1, 3)
+            # Pre-fetch E_mm as Python floats
+            emm00 = Emm00.tolist()
+            emm01 = Emm01.tolist()
+            emm10 = Emm10.tolist()
+            emm11 = Emm11.tolist()
 
-        # Transfer final positions back to GPU
+            # Sequential acceptance with rank-1 corrections
+            for i in range(B):
+                if bp.n_moved[i] == 0:
+                    continue
+
+                accepted = metropolis_accept(delta_e[i], cfg.kBT, gen, device,
+                                             cfg.dtype, rand_pool=rpool)
+                stats.record('pivot', accepted)
+
+                if not accepted:
+                    continue
+
+                # Apply to both CPU and GPU positions
+                ci = bp.chain_idx[i]
+                bs = bp.bead_start[i]
+                nm = bp.n_moved[i]
+                new_pos_gpu = bp.new_pos[i, :nm]
+                positions_cpu[ci, bs:bs + nm] = new_pos_gpu.cpu()
+                state.positions[ci, bs:bs + nm] = new_pos_gpu
+
+                # Rank-1 update
+                for j in range(i + 1, B):
+                    if bp.n_moved[j] == 0:
+                        continue
+                    correction = (emm11[i][j] - emm01[i][j]) - (emm10[i][j] - emm00[i][j])
+                    if correction != 0.0:
+                        delta_e[j] += correction
+
+        # Ensure GPU state is up to date
         state.positions.copy_(positions_cpu.to(device))
+
     else:
+        # Sequential mode: cell-list based pivot moves
         positions_flat = state.get_all_flat()
         energy_comp.rebuild_cell_list(positions_flat)
 

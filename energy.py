@@ -1,11 +1,13 @@
 """
 Energy computation: 3-zone excluded-volume kernel with hybrid cell-list.
 
-Optimized for minimal per-call overhead:
-  - Cell-list build: torch.argsort (vectorized) → Python dict (O(1) lookup)
-  - Neighbor gathering: Python set operations (~50μs vs ~600μs with torch.unique)
-  - Distance computation: PyTorch tensors on [n_moved, ~K_neighbors] (small)
-  - Cell-list rebuild uses cached CPU positions for instant distance lookups
+Optimized per Migacz et al. "Parallel Implementation of a Sequential Markov
+Chain in Monte Carlo Simulations":
+  - Batched delta-E: FP32 4D broadcast [B, max_moved, n_total, 3] on GPU
+  - Batched E_mm: FP32 5D broadcast [B, B, mm, mm, 3] for rank-1 matrices
+  - torch.compile kernel fusion eliminates per-op GPU launch overhead
+  - Vectorized masking (no Python loops on GPU tensors)
+  - Cell-list path retained for sequential CPU mode
 
 All coordinate operations delegate to NumberSpace.
 """
@@ -14,6 +16,83 @@ import torch
 import math
 from .config import SimulationConfig
 from .number_space import NumberSpace
+
+
+# ---------------------------------------------------------------------------
+# Compiled GPU kernels for batched energy computation (FP32)
+# ---------------------------------------------------------------------------
+
+_COMPILE_MODE = 'reduce-overhead'
+
+def _batched_delta_e_kernel_impl(pos_f32, old_batch, new_batch,
+                                  gs_tensor, nm_tensor,
+                                  box, inv_box, r_rep_sq, rep_e,
+                                  V, max_moved, n_total):
+    """
+    Compute batched delta-E using 4D broadcast.
+    FP32 for throughput (63x faster than FP64 on consumer GPUs).
+    Vectorized masking replaces Python loop over proposals.
+    """
+    # 4D broadcast: [V, max_moved, n_total, 3]
+    d_old = pos_f32[None, None, :, :] - old_batch[:, :, None, :]
+    d_old = d_old - box * torch.round(d_old * inv_box)
+    r2_old = (d_old * d_old).sum(dim=3)  # [V, max_moved, n_total]
+
+    d_new = pos_f32[None, None, :, :] - new_batch[:, :, None, :]
+    d_new = d_new - box * torch.round(d_new * inv_box)
+    r2_new = (d_new * d_new).sum(dim=3)
+
+    # Vectorized self-interaction mask
+    # Build [V, n_total] mask: True for beads that are part of the moved segment
+    bead_idx = torch.arange(n_total, device=pos_f32.device).unsqueeze(0)  # [1, n_total]
+    self_mask = (bead_idx >= gs_tensor.unsqueeze(1)) & \
+                (bead_idx < (gs_tensor + nm_tensor).unsqueeze(1))  # [V, n_total]
+    self_mask_3d = self_mask.unsqueeze(1)  # [V, 1, n_total] → broadcast to [V, max_moved, n_total]
+    r2_old = r2_old.masked_fill(self_mask_3d, float('inf'))
+    r2_new = r2_new.masked_fill(self_mask_3d, float('inf'))
+
+    # Padding mask for proposals with fewer moved beads
+    move_idx = torch.arange(max_moved, device=pos_f32.device).unsqueeze(0)  # [1, max_moved]
+    pad_mask = move_idx >= nm_tensor.unsqueeze(1)  # [V, max_moved]
+    pad_mask_3d = pad_mask.unsqueeze(2)  # [V, max_moved, 1]
+    r2_old = r2_old.masked_fill(pad_mask_3d, float('inf'))
+    r2_new = r2_new.masked_fill(pad_mask_3d, float('inf'))
+
+    # Count overlaps per proposal: [V]
+    e_old_v = (r2_old < r_rep_sq).reshape(V, -1).sum(dim=1)
+    e_new_v = (r2_new < r_rep_sq).reshape(V, -1).sum(dim=1)
+    delta_v = ((e_new_v.float() - e_old_v.float()) * rep_e).tolist()
+
+    return delta_v
+
+
+def _batched_emm_kernel_impl(old_batch, new_batch, box, inv_box, r_rep_sq, rep_e):
+    """
+    Compute all 4 pairwise segment energy matrices E00, E01, E10, E11.
+    [B, B, max_moved, max_moved, 3] → [B, B] count matrices.
+    """
+    def _pairwise(pos_i, pos_j):
+        d = pos_i[:, None, :, None, :] - pos_j[None, :, None, :, :]
+        d = d - box * torch.round(d * inv_box)
+        r2 = (d * d).sum(dim=4)
+        return (r2 < r_rep_sq).sum(dim=(2, 3)).float() * rep_e
+
+    e00 = _pairwise(old_batch, old_batch)
+    e01 = _pairwise(old_batch, new_batch)
+    e10 = _pairwise(new_batch, old_batch)
+    e11 = _pairwise(new_batch, new_batch)
+    return e00, e01, e10, e11
+
+
+# Try to compile; fall back gracefully if torch.compile is unavailable
+try:
+    _batched_delta_e_kernel = torch.compile(
+        _batched_delta_e_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
+    _batched_emm_kernel = torch.compile(
+        _batched_emm_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
+except Exception:
+    _batched_delta_e_kernel = _batched_delta_e_kernel_impl
+    _batched_emm_kernel = _batched_emm_kernel_impl
 
 
 def energy_kernel(r2: torch.Tensor, r_rep_sq: float, r_max_sq: float,
@@ -46,13 +125,15 @@ def compute_segment_pair_energy(pos_a: torch.Tensor, pos_b: torch.Tensor,
 
 class CellList:
     """
-    Hybrid cell list: torch-vectorized build + Python-dict O(1) gather.
+    Hybrid cell list: numpy-vectorized build + numpy-accelerated gather.
 
-    Build: torch.argsort for cell assignment, then .tolist() → Python dict.
-    Gather: Python set operations for cell lookup (~50μs per call vs ~600μs).
+    Build: numpy argsort for cell assignment → flat sorted arrays with
+    offset table. No Python per-bead loop.
+    Gather: numpy concatenation of cell slices + boolean mask for exclusion.
     """
 
     def __init__(self, cfg: SimulationConfig, ns: NumberSpace):
+        import numpy as np
         self.ns = ns
         self.r_max = cfg.r_max
         nc = max(3, int(math.floor(cfg.box_size / cfg.r_max)))
@@ -64,6 +145,7 @@ class CellList:
 
         # Pre-compute neighbor cell list as Python list-of-lists (fast lookup)
         nc3 = nc * nc * nc
+        self._nc3 = nc3
         self._neighbor_cells = [None] * nc3
         for lin in range(nc3):
             cx = lin // (nc * nc)
@@ -79,53 +161,64 @@ class CellList:
                         nbrs.append((nx * nc + ny) * nc + nz)
             self._neighbor_cells[lin] = nbrs
 
-        # Populated by build()
-        self._cells = {}  # {cell_linear_idx: [atom_idx, ...]}
+        # Populated by build(): numpy flat arrays for vectorized gather
+        self._sorted_order = np.empty(0, dtype=np.int64)
+        self._cell_starts = np.zeros(nc3, dtype=np.int64)
+        self._cell_counts = np.zeros(nc3, dtype=np.int64)
 
     def build(self, positions_cpu: torch.Tensor):
         """
         Build cell list from flat positions [total_beads, 3] (CPU tensor).
 
-        Uses numpy (zero-copy view) for vectorized cell assignment,
-        then builds Python dict from 1D int list.
+        Fully vectorized: numpy cell assignment + bincount + argsort.
+        Zero Python per-bead iteration.
         """
         import numpy as np
         nc = self._nc
         inv_cs = self._inv_cs
         half_box = self._half_box
         nc_m1 = nc - 1
+        nc3 = self._nc3
 
-        # Zero-copy numpy view for vectorized cell assignment
+        # Vectorized cell assignment (zero-copy numpy view)
         pos_np = positions_cpu.numpy()
         cx = np.clip(((pos_np[:, 0] + half_box) * inv_cs).astype(np.int64), 0, nc_m1)
         cy = np.clip(((pos_np[:, 1] + half_box) * inv_cs).astype(np.int64), 0, nc_m1)
         cz = np.clip(((pos_np[:, 2] + half_box) * inv_cs).astype(np.int64), 0, nc_m1)
-        cell_idx_list = ((cx * nc + cy) * nc + cz).tolist()  # 1D int list
+        cell_idx = (cx * nc + cy) * nc + cz
 
-        # Build Python dict (O(n) single pass)
-        cells = {}
-        for i, c in enumerate(cell_idx_list):
-            if c in cells:
-                cells[c].append(i)
-            else:
-                cells[c] = [i]
-        self._cells = cells
+        # Sort atom indices by cell (numpy — no Python loop)
+        self._sorted_order = np.argsort(cell_idx, kind='mergesort')
+
+        # Cell offsets via bincount + cumsum
+        counts = np.bincount(cell_idx, minlength=nc3).astype(np.int64)
+        starts = np.empty(nc3, dtype=np.int64)
+        starts[0] = 0
+        np.cumsum(counts[:-1], out=starts[1:])
+
+        self._cell_counts = counts
+        self._cell_starts = starts
 
     def gather_neighbors(self, old_positions, new_positions,
                           global_exclude_start: int,
                           global_exclude_end: int) -> list:
         """
         Gather neighbor atom indices for moved beads (old + new positions).
-        Pure Python set operations for minimal overhead.
+
+        Uses numpy arrays for cell lookups and bulk concatenation,
+        then Python filtering for exclusion (small result set).
 
         Returns: Python list of atom indices (to be used with torch indexing).
         """
+        import numpy as np
         nc = self._nc
         inv_cs = self._inv_cs
         half_box = self._half_box
-        cells = self._cells
         neighbor_cells = self._neighbor_cells
         nc_m1 = nc - 1
+        sorted_order = self._sorted_order
+        cell_starts = self._cell_starts
+        cell_counts = self._cell_counts
 
         # Convert to Python lists once (avoids per-bead .item() overhead)
         old_list = old_positions.tolist()
@@ -144,23 +237,29 @@ class CellList:
             cz = max(0, min(nc_m1, int((bead[2] + half_box) * inv_cs)))
             query_cells.add((cx * nc + cy) * nc + cz)
 
-        # Collect neighbor cells (Python set for dedup)
+        # Expand to neighbor cells
         nbr_cells = set()
         for qc in query_cells:
             nbr_cells.update(neighbor_cells[qc])
 
-        # Gather atom indices, excluding moved beads
+        # Gather atom indices via numpy slices (bulk concatenation)
+        slices = []
+        for c in nbr_cells:
+            cnt = cell_counts[c]
+            if cnt > 0:
+                s = cell_starts[c]
+                slices.append(sorted_order[s:s + cnt])
+
+        if not slices:
+            return []
+
+        all_atoms = np.concatenate(slices)
+
+        # Exclude moved beads (numpy boolean mask — fast for small exclusion range)
         gs = global_exclude_start
         ge = global_exclude_end
-        result = []
-        for c in nbr_cells:
-            atom_list = cells.get(c)
-            if atom_list is not None:
-                for a in atom_list:
-                    if a < gs or a >= ge:
-                        result.append(a)
-
-        return result
+        mask = (all_atoms < gs) | (all_atoms >= ge)
+        return all_atoms[mask].tolist()
 
 
 class EnergyComputer:
@@ -274,69 +373,89 @@ class EnergyComputer:
         direct pairwise. One [B, max_moved, n_total, 3] kernel instead of
         B sequential calls.
 
-        Intra-segment energy is skipped: all segment/pivot moves are
-        rigid-body rotations that preserve intra-segment distances.
+        Accepts either list[MoveProposal] or BatchProposal.
+        FP32 computation + vectorized masking (no Python loops on GPU).
         """
+        from .batch_proposal import BatchProposal
+
+        if isinstance(proposals, BatchProposal):
+            return self._batch_delta_e_fused(positions_flat, proposals, N)
+
         B = len(proposals)
         results = [0.0] * B
-
         valid_indices = [i for i in range(B) if proposals[i].n_moved > 0]
         if not valid_indices:
             return results
 
         V = len(valid_indices)
         device = positions_flat.device
-        dtype = positions_flat.dtype
         n_total = positions_flat.shape[0]
-        box = self.ns.box_size
-        inv_box = self.ns._inv_box
-        r_rep_sq = self.r_rep_sq
 
-        max_moved = max(proposals[i].n_moved for i in valid_indices)
-        old_batch = torch.zeros(V, max_moved, 3, dtype=dtype, device=device)
-        new_batch = torch.zeros(V, max_moved, 3, dtype=dtype, device=device)
+        pos_f32 = positions_flat.float() if positions_flat.dtype != torch.float32 else positions_flat
+        old_batch = torch.zeros(V, max(proposals[i].n_moved for i in valid_indices), 3,
+                                dtype=torch.float32, device=device)
+        new_batch = torch.zeros_like(old_batch)
+        gs_tensor = torch.empty(V, dtype=torch.long, device=device)
+        nm_tensor = torch.empty(V, dtype=torch.long, device=device)
 
-        # Collect moved-bead global ranges for masking
-        gs_list = []
-        nm_list = []
         for vi, idx in enumerate(valid_indices):
             p = proposals[idx]
             nm = p.n_moved
-            old_batch[vi, :nm] = p.old_positions
-            new_batch[vi, :nm] = p.new_positions
-            gs_list.append(p.chain_idx * N + p.bead_start)
-            nm_list.append(nm)
+            old_batch[vi, :nm] = p.old_positions.float() if p.old_positions.dtype != torch.float32 else p.old_positions
+            new_batch[vi, :nm] = p.new_positions.float() if p.new_positions.dtype != torch.float32 else p.new_positions
+            gs_tensor[vi] = p.chain_idx * N + p.bead_start
+            nm_tensor[vi] = nm
 
-        # Full 4D broadcast: [V, max_moved, n_total, 3]
-        # Fewer kernel launches than dimension-wise (2 kernels vs 12)
-        d_old = positions_flat[None, None, :, :] - old_batch[:, :, None, :]
-        d_old = d_old - box * torch.round(d_old * inv_box)
-        r2_old = (d_old * d_old).sum(dim=3)  # [V, max_moved, n_total]
-        del d_old
-
-        d_new = positions_flat[None, None, :, :] - new_batch[:, :, None, :]
-        d_new = d_new - box * torch.round(d_new * inv_box)
-        r2_new = (d_new * d_new).sum(dim=3)
-        del d_new
-
-        # Mask out self-interactions and padding (set to inf)
-        for vi in range(V):
-            gs = gs_list[vi]
-            nm = nm_list[vi]
-            r2_old[vi, :, gs:gs + nm] = float('inf')
-            r2_new[vi, :, gs:gs + nm] = float('inf')
-            if nm < max_moved:
-                r2_old[vi, nm:, :] = float('inf')
-                r2_new[vi, nm:, :] = float('inf')
-
-        # Count overlaps per proposal: [V]
-        e_old_v = (r2_old < r_rep_sq).reshape(V, -1).sum(dim=1)
-        e_new_v = (r2_new < r_rep_sq).reshape(V, -1).sum(dim=1)
-        delta_v = ((e_new_v.float() - e_old_v.float()) * self.repulsive_energy).tolist()
+        delta_v = _batched_delta_e_kernel(
+            pos_f32, old_batch, new_batch, gs_tensor, nm_tensor,
+            self.ns.box_size, self.ns._inv_box, self.r_rep_sq,
+            self.repulsive_energy, V, old_batch.shape[1], n_total)
 
         for vi, idx in enumerate(valid_indices):
             results[idx] = delta_v[vi]
+        return results
 
+    def _batch_delta_e_fused(self, positions_flat, bp, N):
+        """Fast path: BatchProposal already has GPU batch tensors."""
+        B = bp.B
+        device = positions_flat.device
+        n_total = positions_flat.shape[0]
+        results = [0.0] * B
+
+        valid_indices = [i for i in range(B) if bp.n_moved[i] > 0]
+        if not valid_indices:
+            return results
+
+        V = len(valid_indices)
+        old_f32, new_f32 = bp.get_f32()
+
+        # If all proposals are valid (common case), skip re-indexing
+        if V == B:
+            pos_f32 = positions_flat.float() if positions_flat.dtype != torch.float32 else positions_flat
+            gs, nm = bp.get_gs_nm_tensors(N, device)
+            delta_v = _batched_delta_e_kernel(
+                pos_f32, old_f32, new_f32, gs, nm,
+                self.ns.box_size, self.ns._inv_box, self.r_rep_sq,
+                self.repulsive_energy, V, bp.max_moved, n_total)
+            return delta_v
+
+        # Subset valid proposals
+        pos_f32 = positions_flat.float() if positions_flat.dtype != torch.float32 else positions_flat
+        vi_tensor = torch.tensor(valid_indices, dtype=torch.long, device=device)
+        sub_old = old_f32[vi_tensor]
+        sub_new = new_f32[vi_tensor]
+        gs = torch.tensor([bp.chain_idx[i] * N + bp.bead_start[i] for i in valid_indices],
+                          dtype=torch.long, device=device)
+        nm = torch.tensor([bp.n_moved[i] for i in valid_indices],
+                          dtype=torch.long, device=device)
+
+        delta_v = _batched_delta_e_kernel(
+            pos_f32, sub_old, sub_new, gs, nm,
+            self.ns.box_size, self.ns._inv_box, self.r_rep_sq,
+            self.repulsive_energy, V, bp.max_moved, n_total)
+
+        for vi, idx in enumerate(valid_indices):
+            results[idx] = delta_v[vi]
         return results
 
     def compute_batch_energy_matrices(self, positions_flat: torch.Tensor,
@@ -346,72 +465,69 @@ class EnergyComputer:
           1. E_total[i]: delta-E of each proposal vs stationary system
           2. E_mm[i,j]: 4 pairwise segment energy matrices for rank-1 corrections
 
-        This is the core parallelization from the segmented multistep MC paper.
-        The sequential acceptance loop then reads pre-computed values —
-        no per-pair energy calls needed.
+        Core parallelization from Migacz et al. "Parallel Implementation of
+        a Sequential Markov Chain in Monte Carlo Simulations."
+        Accepts either list[MoveProposal] or BatchProposal.
 
         Returns:
             delta_e: list[float] of length B
             Emm00, Emm01, Emm10, Emm11: [B, B] tensors (on CPU for scalar access)
         """
-        B = len(proposals)
+        from .batch_proposal import BatchProposal
+
+        is_bp = isinstance(proposals, BatchProposal)
+        B = proposals.B if is_bp else len(proposals)
 
         # --- E_total (batched delta-E) ---
         delta_e = self.compute_batch_delta_energy(positions_flat, proposals, N)
 
         # --- E_mm: pairwise segment energy matrices ---
         device = positions_flat.device
-        dtype = positions_flat.dtype
         box = self.ns.box_size
         inv_box = self.ns._inv_box
         r_rep_sq = self.r_rep_sq
         rep_e = self.repulsive_energy
 
-        # Stack proposal positions [B, max_moved, 3]
-        valid = [i for i in range(B) if proposals[i].n_moved > 0]
-        if len(valid) < 2:
+        if is_bp:
+            old_f32, new_f32 = proposals.get_f32()
+            nm_list = proposals.n_moved
+        else:
+            valid = [i for i in range(B) if proposals[i].n_moved > 0]
+            if len(valid) < 2:
+                z = torch.zeros(B, B)
+                return delta_e, z, z.clone(), z.clone(), z.clone()
+
+            max_moved = max(proposals[i].n_moved for i in valid)
+            old_f32 = torch.zeros(B, max_moved, 3, dtype=torch.float32, device=device)
+            new_f32 = torch.zeros(B, max_moved, 3, dtype=torch.float32, device=device)
+            nm_list = [0] * B
+            for i in valid:
+                p = proposals[i]
+                nm = p.n_moved
+                old_f32[i, :nm] = p.old_positions.float() if p.old_positions.dtype != torch.float32 else p.old_positions
+                new_f32[i, :nm] = p.new_positions.float() if p.new_positions.dtype != torch.float32 else p.new_positions
+                nm_list[i] = nm
+
+        if sum(1 for nm in nm_list if nm > 0) < 2:
             z = torch.zeros(B, B)
             return delta_e, z, z.clone(), z.clone(), z.clone()
 
-        max_moved = max(proposals[i].n_moved for i in valid)
-        old_batch = torch.zeros(B, max_moved, 3, dtype=dtype, device=device)
-        new_batch = torch.zeros(B, max_moved, 3, dtype=dtype, device=device)
-        nm_list = [0] * B
+        # Compute all 4 pairwise segment energy matrices on GPU
+        Emm00, Emm01, Emm10, Emm11 = _batched_emm_kernel(
+            old_f32, new_f32, box, inv_box, r_rep_sq, rep_e)
 
-        for i in valid:
-            p = proposals[i]
-            nm = p.n_moved
-            old_batch[i, :nm] = p.old_positions
-            new_batch[i, :nm] = p.new_positions
-            nm_list[i] = nm
+        # Zero out diagonal and invalid entries (vectorized)
+        diag_mask = torch.eye(B, dtype=torch.bool, device=device)
+        Emm00[diag_mask] = 0; Emm01[diag_mask] = 0
+        Emm10[diag_mask] = 0; Emm11[diag_mask] = 0
 
-        # Compute [B, B, max_moved, max_moved] pairwise distances for all 4 combos.
-        # For B=10, max_moved=20: [10,10,20,20,3] = 120K entries = 960KB. Trivial.
-        # old_batch[:, None, :, None, :] shape: [B, 1, mm, 1, 3]
-        # old_batch[None, :, None, :, :] shape: [1, B, 1, mm, 3]
-        # broadcast result: [B, B, mm, mm, 3]
-
-        def _pairwise_energy(pos_i, pos_j):
-            d = pos_i[:, None, :, None, :] - pos_j[None, :, None, :, :]
-            d = d - box * torch.round(d * inv_box)
-            r2 = (d * d).sum(dim=4)  # [B, B, mm, mm]
-            return (r2 < r_rep_sq).sum(dim=(2, 3)).float() * rep_e  # [B, B]
-
-        Emm00 = _pairwise_energy(old_batch, old_batch)
-        Emm01 = _pairwise_energy(old_batch, new_batch)
-        Emm10 = _pairwise_energy(new_batch, old_batch)
-        Emm11 = _pairwise_energy(new_batch, new_batch)
-
-        # Zero out diagonal (self-interaction) and invalid entries
-        for i in range(B):
-            Emm00[i, i] = 0; Emm01[i, i] = 0
-            Emm10[i, i] = 0; Emm11[i, i] = 0
-        for i in range(B):
-            if nm_list[i] == 0:
-                Emm00[i, :] = 0; Emm00[:, i] = 0
-                Emm01[i, :] = 0; Emm01[:, i] = 0
-                Emm10[i, :] = 0; Emm10[:, i] = 0
-                Emm11[i, :] = 0; Emm11[:, i] = 0
+        invalid_mask = torch.tensor([nm == 0 for nm in nm_list],
+                                     dtype=torch.bool, device=device)
+        if invalid_mask.any():
+            Emm00[invalid_mask, :] = 0; Emm00[:, invalid_mask] = 0
+            Emm01[invalid_mask, :] = 0; Emm01[:, invalid_mask] = 0
+            Emm10[invalid_mask, :] = 0; Emm10[:, invalid_mask] = 0
+            Emm11[invalid_mask, :] = 0; Emm11[:, invalid_mask] = 0
 
         # Move to CPU for fast scalar access in acceptance loop
         return (delta_e,

@@ -317,6 +317,204 @@ def propose_pivot_move(state: ChainState, chain_idx: int,
     return MoveProposal(chain_idx, rot_start, rot_end, old_pos, new_pos, 'pivot')
 
 
+def propose_batch_pivot_moves(state: 'ChainState', chain_indices: list,
+                               rand_pool, cfg: SimulationConfig,
+                               ns_work: 'NumberSpace',
+                               positions_work: torch.Tensor) -> list:
+    """
+    Propose B pivot moves using pre-generated random numbers.
+    Works on CPU positions (positions_work: [n_chains, N, 3] on CPU).
+
+    Uses scalar unwrapping per proposal (sequential by nature due to PBC
+    chaining), but rotation application and wrapping are vectorized.
+
+    Args:
+        state: ChainState (used for segment info only)
+        chain_indices: list of chain indices to propose pivots for
+        rand_pool: RandPool for random numbers
+        cfg: SimulationConfig
+        ns_work: NumberSpace on the working device (CPU)
+        positions_work: [n_chains, N, 3] positions tensor on working device
+
+    Returns:
+        list of MoveProposal (on CPU)
+    """
+    N = cfg.N
+    dtype = cfg.dtype
+    B = len(chain_indices)
+    results = []
+
+    if N <= 2:
+        for chain_idx in chain_indices:
+            old_pos = positions_work[chain_idx].clone()
+            results.append(MoveProposal(chain_idx, 0, N, old_pos, old_pos.clone(), 'pivot'))
+        return results
+
+    for chain_idx in chain_indices:
+        positions = positions_work[chain_idx]  # [N, 3]
+
+        pivot_idx = 1 + int(rand_pool.next() * (N - 2))
+        pivot_idx = min(pivot_idx, N - 2)
+        side = int(rand_pool.next() * 2)
+
+        if side == 0:
+            rot_start, rot_end = 0, pivot_idx
+        else:
+            rot_start, rot_end = pivot_idx + 1, N
+
+        n_rot = rot_end - rot_start
+        if n_rot == 0:
+            old_pos = positions[rot_start:rot_end].clone()
+            results.append(MoveProposal(chain_idx, rot_start, rot_end,
+                                        old_pos, old_pos.clone(), 'pivot'))
+            continue
+
+        anchor = positions[pivot_idx]
+
+        if side == 0:
+            beads_to_rotate = positions[rot_start:rot_end].flip(0)
+        else:
+            beads_to_rotate = positions[rot_start:rot_end]
+
+        # Unwrap on CPU (fast scalar)
+        unwrapped = ns_work.unwrap_chain_from_anchor(beads_to_rotate, anchor)
+
+        # SO(3) rotation using pool randoms + scalar Rodrigues
+        angle = 2.0 * math.pi * rand_pool.next()
+        while True:
+            u = 2.0 * rand_pool.next() - 1.0
+            v = 2.0 * rand_pool.next() - 1.0
+            s = u * u + v * v
+            if s < 1.0 and s > 1e-10:
+                break
+        factor = 2.0 * math.sqrt(1.0 - s)
+        ux, uy, uz = u * factor, v * factor, 1.0 - 2.0 * s
+        c = math.cos(angle); si = math.sin(angle); t = 1.0 - c
+        R = torch.tensor([
+            [t*ux*ux+c, t*ux*uy-si*uz, t*ux*uz+si*uy],
+            [t*ux*uy+si*uz, t*uy*uy+c, t*uy*uz-si*ux],
+            [t*ux*uz-si*uy, t*uy*uz+si*ux, t*uz*uz+c],
+        ], dtype=dtype)  # CPU
+
+        relative = unwrapped - anchor.unsqueeze(0)
+        rotated = torch.mm(relative, R.t())
+        new_unwrapped = anchor.unsqueeze(0) + rotated
+        new_pos = ns_work.wrap(new_unwrapped)
+
+        if side == 0:
+            new_pos = new_pos.flip(0)
+
+        old_pos = positions[rot_start:rot_end].clone()
+        results.append(MoveProposal(chain_idx, rot_start, rot_end, old_pos, new_pos, 'pivot'))
+
+    return results
+
+
+def propose_batch_pivot_moves_fused(state: 'ChainState', chain_indices: list,
+                                     rand_pool, cfg: SimulationConfig,
+                                     ns_work: 'NumberSpace',
+                                     positions_work: torch.Tensor,
+                                     gpu_device: torch.device):
+    """
+    Propose B pivot moves and pack into a BatchProposal on GPU.
+
+    Proposals generated on CPU (sequential PBC unwrapping required),
+    then packed directly into GPU batch tensors — no intermediate
+    MoveProposal objects.
+
+    Returns:
+        BatchProposal with positions on gpu_device
+    """
+    from .batch_proposal import BatchProposal
+
+    N = cfg.N
+    dtype = cfg.dtype
+    B = len(chain_indices)
+
+    # First pass: generate all proposals, track max_moved
+    pivot_data = []  # (chain_idx, rot_start, n_rot, old_pos_cpu, new_pos_cpu)
+
+    for chain_idx in chain_indices:
+        positions = positions_work[chain_idx]
+
+        if N <= 2:
+            old_pos = positions[:N].clone()
+            pivot_data.append((chain_idx, 0, N, old_pos, old_pos.clone()))
+            continue
+
+        pivot_idx = 1 + int(rand_pool.next() * (N - 2))
+        pivot_idx = min(pivot_idx, N - 2)
+        side = int(rand_pool.next() * 2)
+
+        if side == 0:
+            rot_start, rot_end = 0, pivot_idx
+        else:
+            rot_start, rot_end = pivot_idx + 1, N
+
+        n_rot = rot_end - rot_start
+        if n_rot == 0:
+            pivot_data.append((chain_idx, rot_start, 0,
+                               positions[rot_start:rot_end].clone(),
+                               positions[rot_start:rot_end].clone()))
+            continue
+
+        anchor = positions[pivot_idx]
+        beads = positions[rot_start:rot_end].flip(0) if side == 0 else positions[rot_start:rot_end]
+
+        unwrapped = ns_work.unwrap_chain_from_anchor(beads, anchor)
+
+        angle = 2.0 * math.pi * rand_pool.next()
+        while True:
+            u = 2.0 * rand_pool.next() - 1.0
+            v = 2.0 * rand_pool.next() - 1.0
+            s2 = u * u + v * v
+            if s2 < 1.0 and s2 > 1e-10:
+                break
+        factor = 2.0 * math.sqrt(1.0 - s2)
+        ux, uy, uz = u * factor, v * factor, 1.0 - 2.0 * s2
+        c = math.cos(angle); si = math.sin(angle); t = 1.0 - c
+        R = torch.tensor([
+            [t*ux*ux+c, t*ux*uy-si*uz, t*ux*uz+si*uy],
+            [t*ux*uy+si*uz, t*uy*uy+c, t*uy*uz-si*ux],
+            [t*ux*uz-si*uy, t*uy*uz+si*ux, t*uz*uz+c],
+        ], dtype=dtype)
+
+        relative = unwrapped - anchor.unsqueeze(0)
+        rotated = torch.mm(relative, R.t())
+        new_pos = ns_work.wrap(anchor.unsqueeze(0) + rotated)
+        if side == 0:
+            new_pos = new_pos.flip(0)
+
+        old_pos = positions[rot_start:rot_end].clone()
+        pivot_data.append((chain_idx, rot_start, n_rot, old_pos, new_pos))
+
+    # Pack into BatchProposal on GPU (one bulk transfer)
+    max_moved = max(d[2] for d in pivot_data) if pivot_data else 0
+    if max_moved == 0:
+        max_moved = 1
+
+    bp = BatchProposal(B, max_moved, gpu_device, dtype)
+    # Build CPU batch tensors, then transfer once
+    old_cpu = torch.zeros(B, max_moved, 3, dtype=dtype)
+    new_cpu = torch.zeros(B, max_moved, 3, dtype=dtype)
+
+    for bi, (ci, rs, nr, old_p, new_p) in enumerate(pivot_data):
+        bp.chain_idx[bi] = ci
+        bp.bead_start[bi] = rs
+        bp.n_moved[bi] = nr
+        bp.move_types[bi] = 'pivot'
+        bp.valid[bi] = nr > 0
+        if nr > 0:
+            old_cpu[bi, :nr] = old_p
+            new_cpu[bi, :nr] = new_p
+
+    # Single CPU→GPU transfer for the entire batch
+    bp.old_pos = old_cpu.to(gpu_device)
+    bp.new_pos = new_cpu.to(gpu_device)
+
+    return bp
+
+
 def propose_pivot_move_pooled(positions_cpu: torch.Tensor, chain_idx: int,
                                rand_pool, ns_cpu, cfg,
                                device_out: torch.device) -> MoveProposal:
@@ -583,3 +781,120 @@ def propose_batch_segment_moves(state: ChainState,
         results.append(MoveProposal(ci, ms, me, old_pos, new_pos, mtype))
 
     return results
+
+
+def propose_batch_segment_moves_fused(state: ChainState,
+                                       segment_list: list,
+                                       gen: torch.Generator,
+                                       cfg: SimulationConfig):
+    """
+    Propose B segment moves returning a BatchProposal (no MoveProposal objects).
+
+    Same GPU-batched algorithm as propose_batch_segment_moves but keeps
+    positions as batch tensors throughout, eliminating the unpack/repack
+    cycle that costs ~3ms of Python overhead per batch.
+
+    Returns:
+        BatchProposal with old_pos, new_pos as [B, max_moved, 3] GPU tensors
+    """
+    from .batch_proposal import BatchProposal
+
+    B = len(segment_list)
+    N = cfg.N
+    ns = state.ns
+    device = cfg.get_torch_device()
+    dtype = cfg.dtype
+    box = ns.box_size
+    inv_box = ns._inv_box
+    seg_info = state.segments
+
+    # Phase 1: Collect segment metadata
+    meta = []
+    for chain_idx, local_seg in segment_list:
+        seg_type = seg_info.get_segment_type(local_seg)
+        seg_start, seg_end = seg_info.get_segment_range(chain_idx, local_seg)
+
+        if seg_type == SegmentInfo.INNER:
+            a_idx = max(seg_start - 1, 0)
+            b_idx = min(seg_end, N - 1)
+            move_start, move_end = seg_start, seg_end
+            mtype = 'hinge'
+        elif seg_type == SegmentInfo.N_TERMINAL or seg_type == SegmentInfo.BOTH:
+            a_idx = min(seg_end, N - 1)
+            b_idx = min(seg_end + 1, N - 1)
+            move_start, move_end = 0, seg_end
+            mtype = 'tail'
+        else:
+            a_idx = max(seg_start - 1, 0)
+            b_idx = max(seg_start - 2, 0)
+            move_start, move_end = seg_start, N
+            mtype = 'tail'
+        meta.append((chain_idx, a_idx, b_idx, move_start, move_end, mtype))
+
+    # Phase 2: GPU batched axes
+    positions_flat = state.get_all_flat()
+    a_global = torch.tensor([m[0] * N + m[1] for m in meta],
+                            dtype=torch.long, device=device)
+    b_global = torch.tensor([m[0] * N + m[2] for m in meta],
+                            dtype=torch.long, device=device)
+    pos_a = positions_flat[a_global]
+    pos_b = positions_flat[b_global]
+    axes = pos_b - pos_a
+    axes = axes - box * torch.round(axes * inv_box)
+    axis_norms = torch.norm(axes, dim=1)
+    valid_mask = axis_norms >= AXIS_EPS
+
+    degen = ~valid_mask
+    if degen.any():
+        for bi in range(B):
+            if degen[bi]:
+                ci, a_idx, b_idx_, ms, me, mt = meta[bi]
+                c_idx = min(a_idx + 1, N - 1)
+                tang = positions_flat[ci * N + c_idx] - positions_flat[ci * N + a_idx]
+                tang = tang - box * torch.round(tang * inv_box)
+                t_norm = torch.norm(tang)
+                if t_norm > AXIS_EPS:
+                    ref_idx = 1 if abs(tang[0].item()) / t_norm.item() > 0.9 else 0
+                    ref = torch.zeros(3, dtype=dtype, device=device)
+                    ref[ref_idx] = 1.0
+                    fb_axis = torch.cross(tang, ref)
+                    if torch.norm(fb_axis) >= AXIS_EPS:
+                        axes[bi] = fb_axis
+                        valid_mask[bi] = True
+
+    # Phase 3: Batched rotation matrices
+    angles = (2.0 * torch.rand(B, generator=gen, dtype=dtype, device=device)
+              - 1.0) * cfg.max_angle_hinge
+    R_batch = _batched_rodrigues(axes, angles, valid_mask)
+
+    # Phase 4: Gather old positions + apply batched rotation
+    max_moved = max(m[4] - m[3] for m in meta)
+
+    old_batch = torch.zeros(B, max_moved, 3, dtype=dtype, device=device)
+    for bi, (ci, _, _, ms, me, _) in enumerate(meta):
+        nm = me - ms
+        old_batch[bi, :nm] = state.positions[ci, ms:me]
+
+    delta = old_batch - pos_a[:, None, :]
+    delta = delta - box * torch.round(delta * inv_box)
+    rotated = torch.bmm(delta, R_batch.transpose(1, 2))
+    new_batch = pos_a[:, None, :] + rotated
+    new_batch = ns.wrap(new_batch)
+
+    # Invalidated proposals get old_pos copied to new_pos
+    invalid = ~valid_mask
+    if invalid.any():
+        new_batch[invalid] = old_batch[invalid]
+
+    # Phase 5: Pack into BatchProposal (NO per-proposal Python loop)
+    bp = BatchProposal(B, max_moved, device, dtype)
+    bp.old_pos = old_batch    # Already [B, max_moved, 3] on GPU
+    bp.new_pos = new_batch    # Already [B, max_moved, 3] on GPU
+    for bi, (ci, _, _, ms, me, mtype) in enumerate(meta):
+        bp.chain_idx[bi] = ci
+        bp.bead_start[bi] = ms
+        bp.n_moved[bi] = me - ms
+        bp.move_types[bi] = mtype
+        bp.valid[bi] = valid_mask[bi].item()
+
+    return bp

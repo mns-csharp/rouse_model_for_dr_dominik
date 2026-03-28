@@ -21,6 +21,7 @@ if __name__ == "__main__":
 
 from rouse_model_python.config import SimulationConfig, CHAIN_CONFIGS, SEED
 from rouse_model_python.simulation import RouseSimulation
+from rouse_model_python.fast_simulation import FastRouseSimulation
 from rouse_model_python.io_utils import (
     write_all_tsvs, generate_all_cross_N_plots, plot_per_N,
     write_validation_summary, write_readme, write_gitattributes,
@@ -29,7 +30,8 @@ from rouse_model_python.io_utils import (
 
 
 # Deliverable output directory
-DELIVERABLE_DIR = r"D:\git\rouse_python_validation_deliverable_2016_MAR_26"
+DELIVERABLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "rouse_python_validation_deliverable_2016_MAR_26")
 
 # Chain lengths to simulate
 CHAIN_LENGTHS = [25, 50, 100, 250, 500]
@@ -47,23 +49,26 @@ def set_all_seeds(seed: int = SEED):
 def detect_device(requested: str = "auto") -> str:
     """Detect best available device.
 
-    Note: For this MC simulation, CPU is typically faster than GPU because
-    the workload consists of many small sequential tensor operations where
-    GPU kernel launch overhead dominates. Use --device cpu for best speed.
+    Per spec C6: GPU only (CellListSegmentedEnergyComputer).
+    Auto mode selects CUDA if available, CPU only as last resort.
     Accepts 'gpu' as an alias for 'cuda'.
     """
     if requested == "gpu":
         requested = "cuda"
     if requested == "auto":
-        device = "cpu"
         if torch.cuda.is_available():
-            print(f"GPU available: {torch.cuda.get_device_name(0)}")
-        print("Auto-selected CPU (fastest for sequential MC)")
+            device = "cuda"
+            print(f"GPU detected: {torch.cuda.get_device_name(0)}")
+        else:
+            device = "cpu"
+            print("WARNING: CUDA not available. Spec requires GPU (C6). "
+                  "Falling back to CPU — results valid but slower.")
     elif requested == "cuda":
         if torch.cuda.is_available():
             device = "cuda"
         else:
-            print("CUDA not available, falling back to CPU")
+            print("WARNING: CUDA not available. Spec requires GPU (C6). "
+                  "Falling back to CPU.")
             device = "cpu"
     else:
         device = requested
@@ -185,7 +190,8 @@ def copy_python_scripts(base_dir: str, source_dir: str):
 
 
 def run_all(device: str = "auto", movie: bool = False,
-            movie_every: int = 10, use_batched_mode: bool = False):
+            movie_every: int = 10, use_batched_mode: bool = False,
+            use_fast_mode: bool = True):
     """Run all simulations, write all outputs.
 
     Args:
@@ -194,6 +200,7 @@ def run_all(device: str = "auto", movie: bool = False,
         movie_every: capture a frame every N sweeps (default 10)
         use_batched_mode: if True, use batched proposals + batched delta-E
                           (works on both CPU and GPU)
+        use_fast_mode: if True, use numba+numpy fast simulation (default)
     """
     print("=" * 70)
     print("ROUSE MODEL MONTE CARLO VALIDATION")
@@ -207,8 +214,22 @@ def run_all(device: str = "auto", movie: bool = False,
         from rouse_model_python.movie import SnapshotCollector, render_movie
         print(f"Movie mode: capturing frames every {movie_every} sweeps")
 
+    if use_batched_mode and device == "cpu":
+        print(f"WARNING: Batched mode on CPU causes catastrophic memory usage "
+              f"from 4D broadcast tensors. Auto-falling back to sequential mode.")
+        use_batched_mode = False
+
+    if device == "cuda" and not use_batched_mode:
+        use_batched_mode = True
+        print(f"Auto-enabling batched mode for CUDA (per Migacz et al.)")
+
+    if use_fast_mode:
+        print(f"Fast mode: numba+numpy MC sweep (Migacz et al. algorithm)")
+        # Fast mode runs on CPU with numba — override device
+        device = "cpu"
+
     if use_batched_mode:
-        print(f"Batched mode: proposals + delta-E computed in parallel per batch")
+        print(f"Batched mode: proposals + delta-E + E_mm matrices computed in parallel (FP32)")
 
     total_start = time.time()
     all_results = {}
@@ -254,7 +275,11 @@ def run_all(device: str = "auto", movie: bool = False,
         if movie:
             collector = SnapshotCollector(save_every=movie_every)
 
-        sim = RouseSimulation(cfg, snapshot_collector=collector)
+        # Use fast (numba+numpy) simulation by default
+        if use_fast_mode:
+            sim = FastRouseSimulation(cfg, snapshot_collector=collector)
+        else:
+            sim = RouseSimulation(cfg, snapshot_collector=collector)
         results = sim.run()
         all_results[N] = results
 
@@ -461,6 +486,7 @@ if __name__ == "__main__":
     enable_movie = False
     movie_every = 10
     batched = False
+    fast = True
 
     args = sys.argv[1:]
     i = 0
@@ -477,8 +503,11 @@ if __name__ == "__main__":
         elif args[i] == "--use_batched_mode":
             batched = True
             i += 1
+        elif args[i] == "--no-fast":
+            fast = False
+            i += 1
         else:
             i += 1
 
     run_all(device, movie=enable_movie, movie_every=movie_every,
-            use_batched_mode=batched)
+            use_batched_mode=batched, use_fast_mode=fast)
