@@ -1,0 +1,3 @@
+.claude/
+__pycache__/
+simulation_output.log
