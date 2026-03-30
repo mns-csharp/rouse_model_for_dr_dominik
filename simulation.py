@@ -22,8 +22,10 @@ class SimulationStats:
     def __init__(self):
         self.hinge_attempted = 0
         self.hinge_accepted = 0
-        self.tail_attempted = 0
-        self.tail_accepted = 0
+        self.n_tail_attempted = 0
+        self.n_tail_accepted = 0
+        self.c_tail_attempted = 0
+        self.c_tail_accepted = 0
         self.pivot_attempted = 0
         self.pivot_accepted = 0
 
@@ -32,10 +34,14 @@ class SimulationStats:
             self.hinge_attempted += 1
             if accepted:
                 self.hinge_accepted += 1
-        elif move_type == 'tail':
-            self.tail_attempted += 1
+        elif move_type == 'n_tail':
+            self.n_tail_attempted += 1
             if accepted:
-                self.tail_accepted += 1
+                self.n_tail_accepted += 1
+        elif move_type == 'c_tail':
+            self.c_tail_attempted += 1
+            if accepted:
+                self.c_tail_accepted += 1
         elif move_type == 'pivot':
             self.pivot_attempted += 1
             if accepted:
@@ -46,8 +52,10 @@ class SimulationStats:
             return f"{100.0 * a / t:.1f}%" if t > 0 else "N/A"
         return (f"Hinge: {rate(self.hinge_accepted, self.hinge_attempted)} "
                 f"({self.hinge_accepted}/{self.hinge_attempted}), "
-                f"Tail: {rate(self.tail_accepted, self.tail_attempted)} "
-                f"({self.tail_accepted}/{self.tail_attempted}), "
+                f"N-tail: {rate(self.n_tail_accepted, self.n_tail_attempted)} "
+                f"({self.n_tail_accepted}/{self.n_tail_attempted}), "
+                f"C-tail: {rate(self.c_tail_accepted, self.c_tail_attempted)} "
+                f"({self.c_tail_accepted}/{self.c_tail_attempted}), "
                 f"Pivot: {rate(self.pivot_accepted, self.pivot_attempted)} "
                 f"({self.pivot_accepted}/{self.pivot_attempted})")
 

@@ -194,6 +194,27 @@ class NumberSpace:
 
         return unwrapped
 
+    def unwrap_chains(self, positions: torch.Tensor) -> torch.Tensor:
+        """
+        Vectorized unwrapping of multiple chains at once.
+
+        Computes MIC bond vectors between consecutive beads (which are
+        always within half the box due to bond connectivity) and uses
+        cumulative sum to reconstruct true unwrapped positions.  Correct
+        even when chains wrap the periodic box multiple times.
+
+        Args:
+            positions: [n_chains, N, 3] wrapped positions
+
+        Returns:
+            [n_chains, N, 3] unwrapped positions (may extend outside box)
+        """
+        bonds = self.mic_delta(positions[:, :-1, :],
+                               positions[:, 1:, :])       # [n_chains, N-1, 3]
+        cum_disp = torch.cumsum(bonds, dim=1)              # [n_chains, N-1, 3]
+        r0 = positions[:, 0:1, :]                          # [n_chains, 1, 3]
+        return torch.cat([r0, r0 + cum_disp], dim=1)       # [n_chains, N, 3]
+
     def unwrap_chain_from_anchor(self, positions: torch.Tensor,
                                    anchor: torch.Tensor,
                                    forward: bool = True) -> torch.Tensor:

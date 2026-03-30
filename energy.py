@@ -532,3 +532,173 @@ class EnergyComputer:
         # Move to CPU for fast scalar access in acceptance loop
         return (delta_e,
                 Emm00.cpu(), Emm01.cpu(), Emm10.cpu(), Emm11.cpu())
+
+
+# ---------------------------------------------------------------------------
+# Validation utilities
+# ---------------------------------------------------------------------------
+
+def compute_delta_energy_bruteforce(positions_flat: torch.Tensor,
+                                     chain_idx: int, bead_start: int,
+                                     old_positions: torch.Tensor,
+                                     new_positions: torch.Tensor,
+                                     N: int, ns: 'NumberSpace',
+                                     r_rep_sq: float,
+                                     repulsive_energy: float) -> float:
+    """
+    Brute-force all-pairs delta-E computation (no cell list).
+
+    Computes energy change by scanning ALL beads in the system against the
+    moved segment. Used as a reference for validating the cell-list path.
+    O(n_moved * n_total) — too slow for production, correct by construction.
+    """
+    n_moved = old_positions.shape[0]
+    n_total = positions_flat.shape[0]
+    global_start = chain_idx * N + bead_start
+    global_end = global_start + n_moved
+    box = ns.box_size
+    inv_box = ns._inv_box
+
+    # Stationary beads = all beads NOT in the moved segment
+    mask = torch.ones(n_total, dtype=torch.bool, device=positions_flat.device)
+    mask[global_start:global_end] = False
+    stationary = positions_flat[mask]  # [K, 3]
+
+    delta_e = 0.0
+
+    if stationary.shape[0] > 0:
+        # Old interactions
+        d_old = stationary.unsqueeze(0) - old_positions.unsqueeze(1)
+        d_old = d_old - box * torch.round(d_old * inv_box)
+        r2_old = (d_old * d_old).sum(dim=2)
+        e_old = (r2_old < r_rep_sq).sum().item()
+
+        # New interactions
+        d_new = stationary.unsqueeze(0) - new_positions.unsqueeze(1)
+        d_new = d_new - box * torch.round(d_new * inv_box)
+        r2_new = (d_new * d_new).sum(dim=2)
+        e_new = (r2_new < r_rep_sq).sum().item()
+
+        delta_e += (e_new - e_old) * repulsive_energy
+
+    # Intra-segment (moved-moved) upper triangle
+    if n_moved > 1:
+        d_old_mm = old_positions.unsqueeze(1) - old_positions.unsqueeze(0)
+        d_old_mm = d_old_mm - box * torch.round(d_old_mm * inv_box)
+        r2_old_mm = (d_old_mm * d_old_mm).sum(dim=2)
+
+        d_new_mm = new_positions.unsqueeze(1) - new_positions.unsqueeze(0)
+        d_new_mm = d_new_mm - box * torch.round(d_new_mm * inv_box)
+        r2_new_mm = (d_new_mm * d_new_mm).sum(dim=2)
+
+        triu = torch.triu(torch.ones(n_moved, n_moved, dtype=torch.bool,
+                                      device=positions_flat.device), diagonal=1)
+        e_old_mm = (r2_old_mm[triu] < r_rep_sq).sum().item()
+        e_new_mm = (r2_new_mm[triu] < r_rep_sq).sum().item()
+        delta_e += (e_new_mm - e_old_mm) * repulsive_energy
+
+    return delta_e
+
+
+def validate_cell_list_vs_bruteforce(energy_comp: 'EnergyComputer',
+                                      state: 'ChainState',
+                                      cfg: 'SimulationConfig',
+                                      n_samples: int = 10) -> dict:
+    """
+    Validate that cell-list delta-E matches brute-force all-pairs.
+
+    Proposes n_samples random hinge moves and compares the two energy paths.
+    Returns dict with 'max_abs_error', 'all_match' (bool), and 'details'.
+    """
+    from .mc_moves import propose_segment_move
+    ns = state.ns
+    N = cfg.N
+    gen = cfg.get_torch_gen()
+    positions_flat = state.get_all_flat()
+    energy_comp.rebuild_cell_list(positions_flat)
+
+    max_err = 0.0
+    details = []
+    seg_info = state.segments
+
+    for i in range(n_samples):
+        chain_idx = i % cfg.n_chains
+        local_seg = i % seg_info.segs_per_chain
+        proposal = propose_segment_move(state, chain_idx, local_seg, gen, cfg)
+        if proposal.n_moved == 0:
+            continue
+
+        de_cell = energy_comp.compute_delta_energy_move(
+            positions_flat, proposal.chain_idx, proposal.bead_start,
+            proposal.old_positions, proposal.new_positions, N)
+
+        de_brute = compute_delta_energy_bruteforce(
+            positions_flat, proposal.chain_idx, proposal.bead_start,
+            proposal.old_positions, proposal.new_positions,
+            N, ns, cfg.r_rep_sq, cfg.repulsive_energy)
+
+        err = abs(de_cell - de_brute)
+        max_err = max(max_err, err)
+        details.append({'cell_list': de_cell, 'bruteforce': de_brute, 'error': err})
+
+    return {
+        'max_abs_error': max_err,
+        'all_match': max_err == 0.0,
+        'details': details,
+    }
+
+
+def validate_fp32_vs_fp64(energy_comp: 'EnergyComputer',
+                           state: 'ChainState',
+                           cfg: 'SimulationConfig',
+                           n_samples: int = 10,
+                           atol: float = 1.0) -> dict:
+    """
+    Validate that FP32 GPU batched delta-E agrees with FP64 CPU delta-E.
+
+    Proposes n_samples moves and compares:
+      - FP64 CPU: cell-list based compute_delta_energy_move (float64)
+      - FP32 GPU: batched compute_batch_delta_energy (float32 kernel)
+
+    For the athermal overlap-counting kernel, differences should be exactly
+    zero (boolean comparisons are precision-independent). The atol parameter
+    guards against edge cases near the cutoff boundary.
+
+    Returns dict with 'max_abs_error', 'all_within_tol', and 'details'.
+    """
+    from .mc_moves import propose_segment_move
+    N = cfg.N
+    gen = cfg.get_torch_gen()
+    positions_flat = state.get_all_flat()
+    energy_comp.rebuild_cell_list(positions_flat)
+
+    max_err = 0.0
+    details = []
+    seg_info = state.segments
+
+    for i in range(n_samples):
+        chain_idx = i % cfg.n_chains
+        local_seg = i % seg_info.segs_per_chain
+        proposal = propose_segment_move(state, chain_idx, local_seg, gen, cfg)
+        if proposal.n_moved == 0:
+            continue
+
+        # FP64 CPU path (cell-list)
+        de_fp64 = energy_comp.compute_delta_energy_move(
+            positions_flat, proposal.chain_idx, proposal.bead_start,
+            proposal.old_positions, proposal.new_positions, N)
+
+        # FP32 batched path (uses float32 kernel internally)
+        de_fp32_list = energy_comp.compute_batch_delta_energy(
+            positions_flat, [proposal], N)
+        de_fp32 = de_fp32_list[0]
+
+        err = abs(de_fp64 - de_fp32)
+        max_err = max(max_err, err)
+        details.append({'fp64': de_fp64, 'fp32': de_fp32, 'error': err})
+
+    return {
+        'max_abs_error': max_err,
+        'all_within_tol': max_err <= atol,
+        'details': details,
+    }

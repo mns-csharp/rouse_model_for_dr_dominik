@@ -20,8 +20,8 @@ from .chain import SegmentInfo
 # Configuration
 # ---------------------------------------------------------------------------
 
-MOVE_SIZE = 20       # Batch size (larger = fewer cell-list rebuilds)
-REBUILD_INTERVAL = 5  # Rebuild cell list every N batches
+MOVE_SIZE = 20       # Batch size for multistep MC
+REBUILD_INTERVAL = 3  # Rebuild cell list every N batches
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +70,45 @@ def _wrap_pos(pos, box, half_box, inv_box):
     return pos - box * np.floor((pos + half_box) * inv_box)
 
 
+# Relative tolerance for bond-length validation (fraction of l0)
+_BOND_TOL = 0.01
+
+
+def _validate_boundary_bonds_np(positions_np, chain_idx, bead_start, n_moved,
+                                 N, l0, box, inv_box):
+    """Check bonds at the edges of a moved segment (numpy path).
+
+    Raises RuntimeError if a boundary bond exceeds l0 * (1 + tol).
+    """
+    tol_sq = (l0 * (1.0 + _BOND_TOL)) ** 2
+    pos = positions_np[chain_idx]
+
+    if bead_start > 0:
+        dx, dy, dz = _mic_delta_3(
+            pos[bead_start - 1, 0], pos[bead_start - 1, 1], pos[bead_start - 1, 2],
+            pos[bead_start, 0], pos[bead_start, 1], pos[bead_start, 2],
+            box, inv_box)
+        d2 = dx * dx + dy * dy + dz * dz
+        if d2 > tol_sq:
+            raise RuntimeError(
+                f"Bond broken: chain {chain_idx}, beads "
+                f"{bead_start - 1}-{bead_start}, "
+                f"dist={d2**0.5:.4f} A (l0={l0:.1f} A)")
+
+    bead_end = bead_start + n_moved
+    if bead_end < N:
+        dx, dy, dz = _mic_delta_3(
+            pos[bead_end - 1, 0], pos[bead_end - 1, 1], pos[bead_end - 1, 2],
+            pos[bead_end, 0], pos[bead_end, 1], pos[bead_end, 2],
+            box, inv_box)
+        d2 = dx * dx + dy * dy + dz * dz
+        if d2 > tol_sq:
+            raise RuntimeError(
+                f"Bond broken: chain {chain_idx}, beads "
+                f"{bead_end - 1}-{bead_end}, "
+                f"dist={d2**0.5:.4f} A (l0={l0:.1f} A)")
+
+
 # ---------------------------------------------------------------------------
 # Move proposal (returns numpy arrays, no PyTorch)
 # ---------------------------------------------------------------------------
@@ -92,35 +131,118 @@ class FastProposal:
         self.move_type = move_type
 
 
+def _unwrap_from_anchor(positions_np, anchor_idx, bead_start, bead_end,
+                         box, inv_box):
+    """
+    Sequentially unwrap beads [bead_start, bead_end) outward from anchor_idx
+    along the chain backbone.  Uses MIC between consecutive bonded beads
+    (always correct since bonds << half_box), NOT single-hop MIC from the
+    anchor (which fails when the segment spans more than half the box).
+
+    Returns:
+        unwrapped [M, 3] numpy array (may extend outside the box)
+    """
+    M = bead_end - bead_start
+    unwrapped = np.empty((M, 3))
+
+    if anchor_idx <= bead_start:
+        # Anchor is at or before the segment — unwrap forward
+        dx, dy, dz = _mic_delta_3(
+            positions_np[anchor_idx, 0], positions_np[anchor_idx, 1],
+            positions_np[anchor_idx, 2],
+            positions_np[bead_start, 0], positions_np[bead_start, 1],
+            positions_np[bead_start, 2], box, inv_box)
+        unwrapped[0] = [positions_np[anchor_idx, 0] + dx,
+                        positions_np[anchor_idx, 1] + dy,
+                        positions_np[anchor_idx, 2] + dz]
+        for k in range(1, M):
+            gi = bead_start + k
+            gi_prev = bead_start + k - 1
+            dx = positions_np[gi, 0] - positions_np[gi_prev, 0]
+            dy = positions_np[gi, 1] - positions_np[gi_prev, 1]
+            dz = positions_np[gi, 2] - positions_np[gi_prev, 2]
+            dx -= box * round(dx * inv_box)
+            dy -= box * round(dy * inv_box)
+            dz -= box * round(dz * inv_box)
+            unwrapped[k] = [unwrapped[k-1, 0] + dx,
+                            unwrapped[k-1, 1] + dy,
+                            unwrapped[k-1, 2] + dz]
+    else:
+        # Anchor is after the segment — unwrap backward
+        last = M - 1
+        gi_last = bead_end - 1
+        dx, dy, dz = _mic_delta_3(
+            positions_np[anchor_idx, 0], positions_np[anchor_idx, 1],
+            positions_np[anchor_idx, 2],
+            positions_np[gi_last, 0], positions_np[gi_last, 1],
+            positions_np[gi_last, 2], box, inv_box)
+        unwrapped[last] = [positions_np[anchor_idx, 0] + dx,
+                           positions_np[anchor_idx, 1] + dy,
+                           positions_np[anchor_idx, 2] + dz]
+        for k in range(last - 1, -1, -1):
+            gi = bead_start + k
+            gi_next = bead_start + k + 1
+            dx = positions_np[gi, 0] - positions_np[gi_next, 0]
+            dy = positions_np[gi, 1] - positions_np[gi_next, 1]
+            dz = positions_np[gi, 2] - positions_np[gi_next, 2]
+            dx -= box * round(dx * inv_box)
+            dy -= box * round(dy * inv_box)
+            dz -= box * round(dz * inv_box)
+            unwrapped[k] = [unwrapped[k+1, 0] + dx,
+                            unwrapped[k+1, 1] + dy,
+                            unwrapped[k+1, 2] + dz]
+
+    return unwrapped
+
+
+def _rotate_and_wrap(unwrapped, anchor_pos, R, box, half_box, inv_box):
+    """Rotate unwrapped positions around anchor, then wrap into box."""
+    relative = unwrapped - anchor_pos[np.newaxis, :]
+    rotated = relative @ R.T
+    new_pos = anchor_pos[np.newaxis, :] + rotated
+    return _wrap_pos(new_pos, box, half_box, inv_box)
+
+
 def _propose_hinge(positions_np, chain_idx, seg_start, seg_end, N,
                    box, inv_box, half_box, max_angle, rng):
-    """Propose hinge rotation. Pure numpy/scalar."""
+    """Propose hinge rotation. Uses sequential unwrapping from anchor."""
     a_idx = max(seg_start - 1, 0)
     b_idx = min(seg_end, N - 1)
     pos_a = positions_np[a_idx]
-    pos_b = positions_np[b_idx]
-
-    dx, dy, dz = _mic_delta_3(
-        pos_a[0], pos_a[1], pos_a[2],
-        pos_b[0], pos_b[1], pos_b[2], box, inv_box)
-    axis_len = math.sqrt(dx*dx + dy*dy + dz*dz)
 
     old_pos = positions_np[seg_start:seg_end].copy()
+
+    # Sequential unwrap from anchor along chain backbone
+    unwrapped = _unwrap_from_anchor(positions_np, a_idx, seg_start, seg_end,
+                                     box, inv_box)
+
+    # Axis direction: from unwrapped anchor to unwrapped b_idx position.
+    # b_idx is one bond past the segment end — unwrap it too via chain path.
+    # Since we unwrapped forward from a_idx, extend one more bond to b_idx.
+    dx = positions_np[b_idx, 0] - positions_np[seg_end - 1, 0]
+    dy = positions_np[b_idx, 1] - positions_np[seg_end - 1, 1]
+    dz = positions_np[b_idx, 2] - positions_np[seg_end - 1, 2]
+    dx -= box * round(dx * inv_box)
+    dy -= box * round(dy * inv_box)
+    dz -= box * round(dz * inv_box)
+    unwrapped_b = [unwrapped[-1, 0] + dx, unwrapped[-1, 1] + dy, unwrapped[-1, 2] + dz]
+
+    # Axis = unwrapped_b - anchor (pos_a is already the anchor position)
+    ax_dx = unwrapped_b[0] - pos_a[0]
+    ax_dy = unwrapped_b[1] - pos_a[1]
+    ax_dz = unwrapped_b[2] - pos_a[2]
+    axis_len = math.sqrt(ax_dx*ax_dx + ax_dy*ax_dy + ax_dz*ax_dz)
+
     if axis_len < AXIS_EPS:
         return FastProposal(chain_idx, seg_start, seg_end - seg_start,
                             old_pos, old_pos.copy(), 'hinge')
 
     inv_len = 1.0 / axis_len
-    ux, uy, uz = dx * inv_len, dy * inv_len, dz * inv_len
+    ux, uy, uz = ax_dx * inv_len, ax_dy * inv_len, ax_dz * inv_len
     angle = (2.0 * rng.random() - 1.0) * max_angle
     R = _rodrigues_matrix(ux, uy, uz, angle)
 
-    # Rotate around pos_a
-    delta = old_pos - pos_a[np.newaxis, :]
-    delta -= box * np.round(delta * inv_box)
-    rotated = delta @ R.T
-    new_pos = pos_a[np.newaxis, :] + rotated
-    new_pos = _wrap_pos(new_pos, box, half_box, inv_box)
+    new_pos = _rotate_and_wrap(unwrapped, pos_a, R, box, half_box, inv_box)
 
     return FastProposal(chain_idx, seg_start, seg_end - seg_start,
                         old_pos, new_pos, 'hinge')
@@ -168,8 +290,9 @@ def _propose_tail(positions_np, chain_idx, seg_start, seg_end,
 
         if axis_len < AXIS_EPS:
             old_pos = positions_np[move_start:move_end].copy()
+            mtype = 'n_tail' if is_n_terminal else 'c_tail'
             return FastProposal(chain_idx, move_start, move_end - move_start,
-                                old_pos, old_pos.copy(), 'tail')
+                                old_pos, old_pos.copy(), mtype)
 
     inv_len = 1.0 / axis_len
     ux, uy, uz = dx * inv_len, dy * inv_len, dz * inv_len
@@ -177,14 +300,15 @@ def _propose_tail(positions_np, chain_idx, seg_start, seg_end,
     R = _rodrigues_matrix(ux, uy, uz, angle)
 
     old_pos = positions_np[move_start:move_end].copy()
-    delta = old_pos - pos_a[np.newaxis, :]
-    delta -= box * np.round(delta * inv_box)
-    rotated = delta @ R.T
-    new_pos = pos_a[np.newaxis, :] + rotated
-    new_pos = _wrap_pos(new_pos, box, half_box, inv_box)
 
+    # Sequential unwrap from anchor, then rotate and wrap
+    unwrapped = _unwrap_from_anchor(positions_np, a_idx, move_start, move_end,
+                                     box, inv_box)
+    new_pos = _rotate_and_wrap(unwrapped, pos_a, R, box, half_box, inv_box)
+
+    mtype = 'n_tail' if is_n_terminal else 'c_tail'
     return FastProposal(chain_idx, move_start, move_end - move_start,
-                        old_pos, new_pos, 'tail')
+                        old_pos, new_pos, mtype)
 
 
 def _propose_segment_move(positions_np, chain_idx, local_seg, seg_info,
@@ -315,19 +439,56 @@ def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng):
     kBT = cfg.kBT
     max_angle = cfg.max_angle_hinge
 
-    # Random permutation of segments
-    perm = rng.permutation(total_segs)
+    # ── Build batched permutation with same-chain exclusion ──────────
+    # Group segments into "rounds" so that each round contains at most
+    # one segment per chain.  Within a round, segments from different
+    # chains can be safely batched (moved in parallel from pre-batch
+    # state) because accepting one move cannot break bonds of another
+    # chain.  Rounds are processed sequentially, with positions fully
+    # updated between rounds.
+    #
+    # Algorithm: bucket segments by chain, shuffle each bucket, then
+    # interleave — round k gets the k-th segment from each chain.
 
     batch_size = MOVE_SIZE
-    n_batches = (total_segs + batch_size - 1) // batch_size
+    segs_per_chain = seg_info.segs_per_chain
+
+    # Bucket segments by chain and shuffle within each bucket
+    buckets = [[] for _ in range(n_chains)]
+    for gs in range(total_segs):
+        buckets[seg_info.seg_chain[gs]].append(gs)
+    for bucket in buckets:
+        rng.shuffle(bucket)
+
+    # Build rounds: round k collects the k-th segment from each chain
+    rounds = []
+    for k in range(segs_per_chain):
+        round_segs = [bucket[k] for bucket in buckets if k < len(bucket)]
+        rng.shuffle(round_segs)  # randomize order within round
+        rounds.append(round_segs)
+
+    # Flatten rounds into perm; batch boundaries will respect rounds
+    perm = []
+    round_boundaries = []  # index in perm where each round starts
+    for round_segs in rounds:
+        round_boundaries.append(len(perm))
+        perm.extend(round_segs)
+    round_boundaries.append(len(perm))  # sentinel
+
+    # Build batch ranges that never cross round boundaries
+    batch_ranges = []
+    for ri in range(len(rounds)):
+        r_start = round_boundaries[ri]
+        r_end = round_boundaries[ri + 1]
+        for bs in range(r_start, r_end, batch_size):
+            be = min(bs + batch_size, r_end)
+            batch_ranges.append((bs, be))
 
     # ── Phase 1: Segment moves ──────────────────────────────────────
-    for b in range(n_batches):
-        b_start = b * batch_size
-        b_end = min(b_start + batch_size, total_segs)
+    for b_idx, (b_start, b_end) in enumerate(batch_ranges):
 
         # Rebuild cell list periodically
-        if b % REBUILD_INTERVAL == 0:
+        if b_idx % REBUILD_INTERVAL == 0:
             pos_flat = positions_np.reshape(-1, 3)
             energy_comp.rebuild_cell_list(pos_flat)
 
@@ -440,6 +601,8 @@ def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng):
             # Apply move
             p = proposals[i]
             positions_np[p.chain_idx, p.bead_start:p.bead_start + p.n_moved] = p.new_pos
+            _validate_boundary_bonds_np(positions_np, p.chain_idx, p.bead_start,
+                                         p.n_moved, N, cfg.l0, box, inv_box)
 
             # Rank-1 energy correction from pre-computed E_mm matrices
             for j in range(i + 1, B):
@@ -475,3 +638,5 @@ def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng):
 
         if accepted:
             positions_np[p.chain_idx, p.bead_start:p.bead_start + p.n_moved] = p.new_pos
+            _validate_boundary_bonds_np(positions_np, p.chain_idx, p.bead_start,
+                                         p.n_moved, N, cfg.l0, box, inv_box)

@@ -31,9 +31,9 @@ class StaticObservables:
         Returns:
             [n_chains] tensor of R² values
         """
-        r_start = positions[:, 0, :]
-        r_end = positions[:, -1, :]
-        return ns.mic_dist_sq(r_start, r_end)
+        unwrapped = ns.unwrap_chains(positions)
+        diff = unwrapped[:, -1, :] - unwrapped[:, 0, :]
+        return (diff * diff).sum(dim=-1)
 
     @staticmethod
     def compute_Rg2(positions: torch.Tensor, ns: NumberSpace) -> torch.Tensor:
@@ -42,16 +42,13 @@ class StaticObservables:
 
         Rg² = (1/N) Σ_i |r_i - r_cm|²
 
-        Uses NumberSpace.mic_delta() to unwrap positions relative to the
-        first bead, handling chains that span the periodic box boundary.
+        Uses sequential bond-by-bond unwrapping to correctly handle chains
+        that span (or wrap) the periodic box boundary.
 
         Returns:
             [n_chains] tensor of Rg² values
         """
-        r0 = positions[:, 0:1, :]  # [n_chains, 1, 3]
-        delta = ns.mic_delta(r0, positions)  # [n_chains, N, 3]
-        unwrapped = r0 + delta
-
+        unwrapped = ns.unwrap_chains(positions)
         cm = unwrapped.mean(dim=1, keepdim=True)  # [n_chains, 1, 3]
         diff = unwrapped - cm
         return (diff * diff).sum(dim=2).mean(dim=1)
@@ -60,27 +57,28 @@ class StaticObservables:
     def compute_end_to_end_vector(positions: torch.Tensor,
                                    ns: NumberSpace) -> torch.Tensor:
         """
-        End-to-end vector R = r_end - r_start (MIC) for each chain.
+        End-to-end vector R = r_end - r_start for each chain.
+
+        Uses sequential unwrapping so the vector reflects the true chain
+        path, not the minimum-image shortcut.
 
         Returns:
             [n_chains, 3] tensor
         """
-        r_start = positions[:, 0, :]
-        r_end = positions[:, -1, :]
-        return ns.mic_delta(r_start, r_end)
+        unwrapped = ns.unwrap_chains(positions)
+        return unwrapped[:, -1, :] - unwrapped[:, 0, :]
 
     @staticmethod
     def compute_center_of_mass(positions: torch.Tensor,
                                 ns: NumberSpace) -> torch.Tensor:
         """
-        Center of mass for each chain, using MIC unwrapping via NumberSpace.
+        Center of mass for each chain, using sequential bond-by-bond
+        unwrapping via NumberSpace.
 
         Returns:
             [n_chains, 3] tensor
         """
-        r0 = positions[:, 0:1, :]
-        delta = ns.mic_delta(r0, positions)
-        unwrapped = r0 + delta
+        unwrapped = ns.unwrap_chains(positions)
         return unwrapped.mean(dim=1)
 
     @staticmethod

@@ -55,450 +55,234 @@ SUCCESS CRITERIA
 
 ================================================================
 
-The aim of this context is to 
+The aim of this context is to visit & test this checklist [workspace/rouse_model_python/Rouse_theory/rouse_verification_checklist.docx] against rouse python codebase.
 
 1. prove that surpass-alpha CG representation fully abides by the Rouse static and dynamic properties listed by [Kuriata, A., Gront, D. & Sikorski, A., CMST 22(4), 179-185 (2016)].
- 
-2. find out 
+
+2. find out
 --- which Rouse properties in [Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)] are met by the surpass-alpha CG representation
---- which Rouse properties  in [Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)] are not met by the surpass-alpha CG representation 
- 
+--- which Rouse properties  in [Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)] are not met by the surpass-alpha CG representation
+
+3. Map how Rouse property compliance changes across a progression of increasing
+   chain densities (phi), from dilute to dense regimes.
+
+4. Generate publication-quality plots and structured data for all findings.
+
 ================================================================
 
 Before starting the main task iterations, create a `requirements_list.md.`
 
 ================================================================
 
-        ROUSE MODEL: PROPERTIES AND MATHEMATICAL EQUATIONS
+SIMULATION & VALIDATION OF ROUSE PROPERTIES USING SURPASS ALPHA CG FRAMEWORK:
 ----------------------------------------------------------------------------
 
-Sources:
-  Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)
-  Kuriata, A., Gront, D. & Sikorski, A., CMST 22(4), 179-185 (2016)
-
-
-----------------------------------------------------------------------------
-1  STATIC PROPERTIES
-----------------------------------------------------------------------------
-
-1.1  Gaussian Submolecule Probability
-──────────────────────────────────────
-The probability that the far end of a submolecule is found at position (x,y,z)
-relative to its near end, assuming the submolecule is long enough for Gaussian
-statistics to apply.
-
-  ψ(x,y,z) dx dy dz = (β/π)^(3/2) exp[−β(x² + y² + z²)] dx dy dz
-
-  β = 3 / (2σ²),  where σ² = mean-square submolecule end-to-end separation
-
-
-1.2  Mean-Squared End-to-End Distance
-──────────────────────────────────────
-The average squared distance between the first and last beads of the chain,
-measuring overall chain extension.
-
-  ⟨R²⟩ = ⟨(r_N − r_1)²⟩
-
-  Scaling:  ⟨R²⟩ ~ N^(2ν),   ν ≈ 0.588 (3D SAW with excluded volume)
-  Ideal Rouse (no excluded volume):  ⟨R²⟩ = Nσ²,  i.e. ν = 0.5
-
-
-1.3  Mean-Squared Radius of Gyration
-─────────────────────────────────────
-The average squared distance of all beads from the chain's center of mass,
-a less noisy measure of chain size than R².
-
-  ⟨R_g²⟩ = ⟨ Σ_{i=1}^{N} (r_i − r_CM)² ⟩
-
-  Scaling:  ⟨R_g²⟩ ~ N^(2ν),  same exponent as ⟨R²⟩
-
-
-1.4  Universal Ratio R² / R_g²
-───────────────────────────────
-A shape diagnostic ratio that is constant for a given universality class;
-deviations signal sampling or equilibration problems.
-
-  ⟨R²⟩ / ⟨R_g²⟩ ≈ 6.25   (3D self-avoiding walk)
-  Ideal chain (Gaussian):  ⟨R²⟩ / ⟨R_g²⟩ = 6
-
-
-1.5  Configuration Probability (Full Chain)
-───────────────────────────────────────────
-The joint probability density for the entire chain configuration in
-3N-dimensional space, assuming independent Gaussian submolecules.
-
-  Ψ = (β/π)^(3N/2) exp[−β Σ_{j=1}^{N} (x_j² + y_j² + z_j²)]
-
-
-----------------------------------------------------------------------------
-2  DYNAMIC PROPERTIES
-----------------------------------------------------------------------------
-
-2.1  Rouse Matrix Eigenvalues
-─────────────────────────────
-Eigenvalues of the tridiagonal connectivity matrix A that couples
-nearest-neighbor submolecules along the chain.
-
-  λ_p = 4 sin²[ pπ / (2(N+1)) ],    p = 1, 2, …, N
-
-
-2.2  Relaxation Times (Exact)
-─────────────────────────────
-Each normal mode p has a characteristic relaxation time governing how quickly
-that mode of coordinated segmental motion decays.
-
-  τ_p = σ² / [ 24 B k T  sin²( pπ / (2(N+1)) ) ],    p = 1, 2, …, N
-
-  B = mobility of the end of a submolecule
-  k = Boltzmann constant;  T = temperature
-
-
-2.3  Relaxation Times (Long-Wavelength Approximation, p ≪ N)
-────────────────────────────────────────────────────────────
-For low mode numbers the sine can be approximated, yielding relaxation times
-independent of how the chain is subdivided.
-
-  τ_p ≈ σ² N² / (6π² p² B k T)
-
-  Equivalently using measurable quantities:
-  τ_p = 6(η₀ − η_s) / (π² p² n k T)
-
-  where η₀ = steady-flow solution viscosity, η_s = solvent viscosity,
-        n = number density of polymer molecules
-
-
-2.4  Longest Relaxation Time Scaling
-────────────────────────────────────
-The slowest mode (p = 1) sets the overall chain relaxation timescale; its
-scaling with N determines how simulation cost grows with chain length.
-
-  τ_R = τ_1 ~ N^(1+2ν)
-
-  Ideal Rouse (ν = 0.5):  τ_R ~ N²
-  With excluded volume (ν ≈ 0.588):  τ_R ~ N^2.18
-
-
-2.5  Steady-Flow Viscosity
-──────────────────────────
-The zero-frequency viscosity of the polymer solution, combining the solvent
-contribution with the summed contributions of all relaxation modes.
-
-  η₀ = η_s + nσ² N(N+2) / (36 B)
-
-
-2.6  Complex Viscosity Components
-─────────────────────────────────
-The real part η₁ gives the in-phase (dissipative) response and η₂ gives the
-out-of-phase (elastic) response under oscillatory shear.
-
-  η₁ = η_s + n k T  Σ_{p=1}^{N}  τ_p / (1 + ω² τ_p²)
-
-  η₂ = n k T  Σ_{p=1}^{N}  ω τ_p² / (1 + ω² τ_p²)
-
-  η* = η₁ − iη₂  (complex viscosity);  ω = angular frequency
-
-
-2.7  Complex Shear Modulus Components
-─────────────────────────────────────
-The storage modulus G₁ quantifies elastic energy stored per cycle and the
-loss modulus G₂ quantifies energy dissipated per cycle.
-
-  G* = G₁ + i G₂ = iω η*
-
-  G₁ = n k T  Σ_{p=1}^{N}  ω² τ_p² / (1 + ω² τ_p²)
-
-  G₂ = ω η_s + n k T  Σ_{p=1}^{N}  ω τ_p / (1 + ω² τ_p²)
-
-
-2.8  High-Frequency Approximations
-───────────────────────────────────
-Closed-form expressions valid when many modes contribute, obtained by
-replacing the discrete mode sum with an integral.
-
-  η₁ ≈ η_s + 3(η₀ − η_s) / [π (2ωτ₁)^(1/2)],    2 < ωτ₁ < N²/250
-
-  G₁ ≈ n k T [ (π/2)(ωτ₁/2)^(1/2) − 0.5 ],       5 < ωτ₁ < N²/250
-
-
-2.9  Diffusion Coefficient
-──────────────────────────
-The rate at which the chain's center of mass diffuses through the medium,
-inversely proportional to chain length because total friction scales
-linearly with N.
-
-  D = k_B T / (N ζ)
-
-  Equivalently:  D = ⟨(r(t) − r(0))²⟩ / (6t)
-
-  Scaling:  D ~ N^(−1)   (Rouse prediction)
-
-
-2.10  Center-of-Mass Mean Square Displacement
-─────────────────────────────────────────────
-The center of mass undergoes normal (Fickian) diffusion at all times,
-growing linearly with time.
-
-  g_CM(t) = ⟨(r_CM(t) − r_CM(0))²⟩ = 6 D t  ~  t^1
-
-
-2.11  Middle-Segment Mean Square Displacement
-─────────────────────────────────────────────
-A single interior monomer shows sub-diffusive motion at short times due to
-chain connectivity constraints, crossing over to free diffusion once the
-chain has fully relaxed.
-
-  g₁(t) = ⟨(r_{N/2}(t) − r_{N/2}(0))²⟩
-
-  g₁(t) ~ t^(1/2)     for t < τ_R   (sub-diffusive, internal modes)
-  g₁(t) ~ t^1         for t ≥ τ_R   (free diffusion)
-
-
-2.12  End-to-End Vector Autocorrelation
-───────────────────────────────────────
-Measures how quickly the chain loses memory of its initial end-to-end
-orientation; the decay time defines the longest relaxation time τ_R.
-
-  g_R(t) = ⟨R(0) · R(t)⟩ / ⟨R²⟩
-
-  g_R(t) ~ exp(−t / τ_R)
-
-  τ_R extracted at g_R(τ_R) = 1/e
-
-
-----------------------------------------------------------------------------
-3  MODEL POTENTIALS
-----------------------------------------------------------------------------
-
-3.1  Harmonic Bond (Bead-Spring / Rouse Model)
-──────────────────────────────────────────────
-Nearest-neighbor beads are connected by harmonic springs that penalize
-deviations from an equilibrium bond length.
-
-  U_ij^S = k (l_ij − l₀)²
-
-  l₀ = equilibrium bond length;  k = spring constant
-
-
-3.2  Excluded Volume (Athermal Hard-Core)
-─────────────────────────────────────────
-A purely repulsive step-function potential that prevents bead overlap,
-making the system athermal.
-
-  U_ij = E   for r_ij ≤ d_k
-  U_ij = 0   for r_ij > d_k
-
-  d_k = bead diameter;  E = repulsive energy barrier
-
-
-----------------------------------------------------------------------------
-4  SUMMARY OF KEY SCALING LAWS
-----------------------------------------------------------------------------
-
-  Property              Scaling Law      Rouse Exponent
-  ─────────────────────────────────────────────────────────────────
-  ⟨R²⟩, ⟨R_g²⟩         ~ N^(2ν)        2ν = 1.0 (ideal); ≈1.18 (SAW)
-  R² / R_g² ratio       ≈ const         6 (ideal); ≈6.25 (SAW)
-  τ_R (longest relax.)  ~ N^(1+2ν)      2.0 (ideal); ≈2.18 (SAW)
-  D (diffusion coeff.)  ~ N^(−1)        −1
-  g_CM(t)               ~ t^1           1
-  g₁(t), t < τ_R        ~ t^(1/2)       0.5
-
-
-==================================================================================
-   PROPERTIES VALIDATED BY KURIATA, GRONT & SIKORSKI, CMST 22(4) 179-185 (2016)
---------------------------------------------------------------------------------
-
-The authors used two off-lattice coarse-grained models (bead-spring Rouse model
-and fixed-bond-length backrub model) with athermal excluded volume to validate
-the following Rouse-model properties via Monte Carlo simulation.
-
-
---------------------------------------------------------------------------------
-1  STATIC PROPERTIES VALIDATED
-----------------------------------------------------------------------------
-
-1.1  Mean-Squared End-to-End Distance Scaling
-─────────────────────────────────────────────
-Both models reproduce the expected power-law growth of chain size with chain
-length, confirming self-avoiding walk universality.
-
-  ⟨R²⟩ ~ N^(2ν)
-
-  Measured exponent:  2ν = 1.20  (both models)
-  Theory (3D SAW):   2ν ≈ 1.18
-
-
-1.2  Mean-Squared Radius of Gyration Scaling
-────────────────────────────────────────────
-The radius of gyration scales with the same exponent as the end-to-end
-distance, providing an independent confirmation of correct static scaling.
-
-  ⟨R_g²⟩ ~ N^(2ν)
-
-  Measured exponent:  2ν = 1.20  (both models)
-  Theory (3D SAW):   2ν ≈ 1.18
-
-
-----------------------------------------------------------------------------
-2  DYNAMIC PROPERTIES VALIDATED
-----------------------------------------------------------------------------
-
-2.1  Center-of-Mass Mean Square Displacement
-────────────────────────────────────────────
-The center of mass exhibits normal Fickian diffusion (linear in time) for
-both algorithms, confirming that the pseudo-time scale is properly defined.
-
-  g_CM(t) = ⟨(r_CM(t) − r_CM(0))²⟩ ~ t^1
-
-  Measured exponent:  1.00  (backrub);  0.95  (Rouse bead-spring)
-  Theory:             1.00
-
-
-2.2  Middle-Segment Mean Square Displacement
-────────────────────────────────────────────
-The middle monomer shows two distinct time regimes: sub-diffusive at short
-times due to chain connectivity, crossing over to free diffusion after the
-longest relaxation time.
-
-  g₁(t) = ⟨(r_{N/2}(t) − r_{N/2}(0))²⟩
-
-  g₁(t) ~ t^(1/2)   for t < τ_R
-  g₁(t) ~ t^1        for t ≥ τ_R
-
-  Measured short-time exponent:  0.57  (backrub);  0.60  (Rouse bead-spring)
-  Theory:                        0.50
-  Note: Slightly higher than 0.5 due to excluded volume effects.
-
-
-2.3  Diffusion Coefficient Scaling
-──────────────────────────────────
-The diffusion coefficient decreases inversely with chain length, as predicted
-by the Rouse model where total friction is proportional to N.
-
-  D = ⟨(r(t) − r(0))²⟩ / (6t)
-
-  D ~ N^(−1)
-
-  Measured exponent:  −1.00  (backrub);  −1.01  (Rouse bead-spring)
-  Theory:             −1.00
-
-
-2.4  Longest Relaxation Time Scaling
-────────────────────────────────────
-The end-to-end vector autocorrelation decay time scales as a power law with
-chain length, with the exponent close to the Rouse prediction for excluded-
-volume chains.
-
-  g_R(t) = ⟨R(0) · R(t)⟩ / ⟨R²⟩  ~  exp(−t / τ_R)
-
-  τ_R ~ N^(1+2ν)
-
-  Measured exponent:  2.13  (backrub);  2.30  (Rouse bead-spring)
-  Theory (SAW):      ≈2.18
-
-
-----------------------------------------------------------------------------
-3  SUMMARY TABLE — MEASURED vs THEORETICAL EXPONENTS
-----------------------------------------------------------------------------
-
-  Property              Theory     Backrub Model   Rouse Bead-Spring
-  ──────────────────────────────────────────────────────────────────
-  ⟨R²⟩, ⟨R_g²⟩  (2ν)   ≈1.18        1.20              1.20
-  g_CM(t)  exponent      1.00        1.00              0.95
-  g₁(t) short-time       0.50        0.57              0.60
-  D  exponent            −1.00       −1.00             −1.01
-  τ_R  exponent          ≈2.18        2.13              2.30
-
-==================================================================================
-
-
-Simulation & validation of Rouse properties using surpass alpa CG framework:
-----------------------------------------------------------------------------
-
-### Use the following simulation Parameters
+### Key physical clarifications confirmed by Dr. Dominik Gront (30 Mar 2026):
+ - The excluded volume energy E is INFINITE. Any move violating excluded volume
+   is ALWAYS rejected regardless of simulation temperature. This makes the system
+   effectively athermal: temperature is irrelevant to the accept/reject decision
+   because exp(-inf/kBT) = 0 for all finite T.
+ - Concentration (phi) is NOT fixed at a single value. A progression of increasing
+   densities must be tested to map where and how Rouse behavior is fulfilled,
+   weakened, or broken.
+
+### Simulation parameters must be set such that the simulation always equilibrates in sweeps<=10000 irrespective of the beads counts
+
+### Use the following simulation parameters:
  - Chain lengths: N = 25, 50, 100, 250, 500
- - Volume fraction: phi = 0.035 (constant for all N)
- - Athermal excluded volume (contactEnergy = 0, RepulsiveEnergy = 1e6)
+ - Volume fraction: phi = density progression (NOT a single fixed value)
+ - Excluded volume: INFINITE hard-core barrier (E -> inf). Any overlapping move
+   is always rejected. Temperature does not enter the accept/reject criterion.
+   (contactEnergy = 0, RepulsiveEnergy = 1e6 as practical approximation of infinity)
  - MC moves: Segmented hinge + N-tail + C-tail (local) + pivot (global)
- - Bond spacing: l0 = 1.5 * sigma = 5.7 A (sigma = 3.8 A)
- - Temperature: 300 K
- - Random walk initialization for all chain lengths
- - Backend: CPU only (CellListSegmentedEnergyComputer with CaContactKernel)
- - GPU was not used; all simulations ran on CPU. GPU acceleration (ILGPU) is available in the codebase but was not benchmarked for this validation campaign. For large N (especially N=500), GPU would significantly reduce wall-clock time.
+ - Bond spacing: l0 = 1.5 * sigma = 5.7 A (sigma = 3.8 A, chosen by Mohammad Nazmul Saqib)
+ - l0/d0 = 1.5 must be verified against Kuriata Fig. 3 to confirm it places
+   SURPASS-alpha in the correct SAW scaling regime yielding 2nu ~ 1.20
+ - Temperature: athermal -- temperature does NOT appear anywhere as a simulation
+   parameter. The Boltzmann accept/reject criterion reduces to: accept if no
+   overlap, reject if overlap.
+ - Random walk initialization (self-avoiding off-lattice) for ALL chain lengths
+ - The framework should be able to handle both CPU and GPU parallelization.
 
-### Use the following chain Counts and Sweeps count for each length of chains:
-┌─────┬────────┬───────────┬─────────────┬─────────┬───────┐
-| N   | Chains | Eq Sweeps | Prod Sweeps | Box (A) | phi   |
-├-----┼--------┼-----------┼-------------┼---------┼-------┤
-| 25  | 500    | 2,000     | 5,000       | 269.6   | 0.035 |
-| 50  | 500    | 5,000     | 5,000       | 339.7   | 0.035 |
-| 100 | 500    | 5,000     | 5,000       | 428.0   | 0.035 |
-| 250 | 200    | 10,000    | 5,000       | 428.0   | 0.035 |
-| 500 | 110    | 25,000    | 10,000      | 441.8   | 0.035 |
-└─────┴────────┴───────────┴─────────────┴─────────┴───────┘
+### Density progression (confirmed by Dr. Dominik Gront as core requirement):
+Simulations MUST be run across the following phi levels for ALL chain lengths.
+Worker agents must determine chain counts, box sizes, and sweep schedules.
 
-### Dataset to be produced for N=25, 50, 100, 250, 500.
+phi levels: 0.001 (effectively dilute), 0.01, 0.05, 0.10, 0.20, 0.30
 
+This gives a 5 x 6 simulation matrix (N x phi) = 30 state points.
 
-### Plots to be generated for each propety proof or validation.
+### Use the following chain Counts:
+For each state point, workers must fill this table:
++-----+-------+--------+-----------+-------------+---------+
+| N   | phi   | Chains | Eq Sweeps | Prod Sweeps | Box (A) |
++-----+-------+--------+-----------+-------------+---------+
+|  25 | 0.001 |   ?    |     ?     |      ?      |    ?    |
+|  25 | 0.01  |   ?    |     ?     |      ?      |    ?    |
+|  25 | 0.05  |   ?    |     ?     |      ?      |    ?    |
+|  25 | 0.10  |   ?    |     ?     |      ?      |    ?    |
+|  25 | 0.20  |   ?    |     ?     |      ?      |    ?    |
+|  25 | 0.30  |   ?    |     ?     |      ?      |    ?    |
+|  50 | 0.001 |   ?    |     ?     |      ?      |    ?    |
+| ... | ...   |  ...   |    ...    |     ...     |   ...   |
+| 500 | 0.30  |   ?    |     ?     |      ?      |    ?    |
++-----+-------+--------+-----------+-------------+---------+
+
+Box size derivation: L_box = sigma * (N_chains * N / phi)^(1/3)
+Document derivation for every state point. Verify L_box is consistent with phi.
+
+### Scaling targets from Kuriata 2016 [REF-1]:
+  Static:  R2 and Rg2 ~ N^1.20  (nu = 0.5888, SAW regime, dilute limit)
+  Dynamic: g_CM(t) ~ t^1.00
+           g1(t)   ~ t^0.60 (short time), t^1.00 (long time)
+           D       ~ N^-1.00  (Backrub: -1.00, Rouse: -1.01)
+           tau_R   ~ N^2.2    (Backrub: 2.13,  Rouse: 2.30)
+
+### Dataset to be produced for all 30 state points (N x phi matrix).
+
+### Plots to be generated for each property proof or validation.
+ - Per-phi cross-N scaling plots for all static and dynamic properties
+ - Cross-phi analysis plots showing how scaling exponents change with density
+ - Rouse compliance heatmap: rows = properties, columns = phi levels,
+   cells = PASS (green) / FAIL (red) / MARGINAL (yellow)
+ - Identify phi* (critical density) above which each Rouse property fails
 
 ### Directory structure to be created for the files:
 
-Save the simulation results in 
+Save the simulation results in
  - "D:\git\rouse_python_validation_deliverable_2016_MAR_26\"
 
 rouse_python_validation_deliverable_2016_MAR_26/
-  ├── README.md
-  ├── .gitattributes
-  │
-  ├── 01_static_properties/
-  │   ├── fig_R2_vs_N.png                          # [1] <R2> vs N scaling (from fig1_static)
-  │   ├── fig_Rg2_vs_N.png                         # [2] <Rg2> vs N scaling (from fig1_static)
-  │   ├── fig_R2_Rg2_combined_vs_N.png             # [3] Combined R2+Rg2 scaling (from fig1_static)
-  │   └── fig_ratio_R2_over_Rg2_vs_N.png           # [4] R2/Rg2 ratio vs N (from fig1_static)
-  │
-  ├── 02_dynamic_properties/
-  │   ├── fig_g1_middle_segment_msd_vs_sweep.png    # [5] g1(t) all N overlaid (from fig2_seg20_msd)
-  │   ├── fig_gcm_center_of_mass_msd_vs_sweep.png   # [6] g_CM(t) all N overlaid (from fig3_seg20_diffusion)
-  │   ├── fig_diffusion_coefficient_D_vs_N.png      # [7] D vs N scaling (from fig3_seg20_diffusion)
-  │   └── fig_relaxation_time_tau_R_vs_N.png        # [8] tau_R vs N scaling (from fig4_seg20_autocorr)
-  │
-  ├── 03_per_chain_length/
-  │   └── N{N}/                                     # N = 25, 50, 100, 250, 500
-  │       ├── R2_vs_MC_sweep.png                    # [9]  R2 equilibration (from static_vs_sweep)
-  │       ├── Rg2_vs_MC_sweep.png                   # [10] Rg2 equilibration (from static_vs_sweep)
-  │       ├── g1_middle_segment_msd.png             # [11] g1(t) (from fig2_seg20_msd_N{N}_s42)
-  │       ├── gcm_center_of_mass_msd.png            # [12] g_CM(t) (from fig3_seg20_diffusion_N{N}_s42)
-  │       └── autocorrelation_end_to_end_vector.png # [13] g_R(t) (from fig4_seg20_autocorr_N{N}_s42)
-  │
-  ├── 04_equilibration_evidence/
-  │   ├── fig_R2_vs_MC_sweep_all_N.png              # [14] R2 eq check all N (from static_vs_sweep)
-  │   └── fig_Rg2_vs_MC_sweep_all_N.png             # [15] Rg2 eq check all N (from static_vs_sweep)
-  │
-  ├── 05_data/
-  │   ├── tavg_validation_summary.json              # Aggregated metrics + pass/fail
-  │   └── N{N}/                                     # N = 25, 50, 100, 250, 500
-  │       ├── fig1_static_N{N}_s42.tsv              # chain, R2, Rg2 (final snapshot)
-  │       ├── fig2_seg20_msd_N{N}_s42.tsv           # sweep, g1
-  │       ├── fig3_seg20_diffusion_N{N}_s42.tsv     # sweep, g_CM
-  │       ├── fig4_seg20_autocorr_N{N}_s42.tsv      # sweep, gR
-  │       └── static_vs_sweep.tsv                   # sweep, phase, R2, Rg2, R2/Rg2
-  │
-  └── 06_python_scripts/
+  |
+  +-- README.md
+  +-- .gitattributes
+  +-- requirements_list.md
+  +-- iteration_log.txt
+  |
+  +-- 01_static_properties/
+  |     fig_R2_vs_N_per_phi.png              -- R2 vs N, one curve per phi
+  |     fig_Rg2_vs_N_per_phi.png             -- Rg2 vs N, one curve per phi
+  |     fig_2nu_vs_phi.png                   -- scaling exponent vs phi
+  |     fig_ratio_R2_Rg2_vs_phi.png          -- ratio vs phi, all N overlaid
+  |     fig_R2_Rg2_combined_dilute.png       -- combined plot at phi=0.001
+  |
+  +-- 02_dynamic_properties/
+  |     fig_g1_vs_sweep_per_phi.png          -- g1(t) at each phi, all N
+  |     fig_gcm_vs_sweep_per_phi.png         -- g_CM(t) at each phi, all N
+  |     fig_D_vs_N_per_phi.png               -- D vs N, one curve per phi
+  |     fig_tauR_vs_N_per_phi.png            -- tau_R vs N, one curve per phi
+  |     fig_D_exponent_vs_phi.png            -- D scaling exponent vs phi
+  |     fig_tauR_exponent_vs_phi.png         -- tau_R exponent vs phi
+  |     fig_g1_shorttime_exponent_vs_phi.png -- short-time g1 exponent vs phi
+  |
+  +-- 03_per_state_point/
+  |   +-- phi_0.001/
+  |   |   +-- N25/
+  |   |   |     R2_vs_MC_sweep.png
+  |   |   |     Rg2_vs_MC_sweep.png
+  |   |   |     g1_middle_segment_msd.png
+  |   |   |     gcm_center_of_mass_msd.png
+  |   |   |     autocorrelation_end_to_end_vector.png
+  |   |   +-- N50/  N100/  N250/  N500/  (same 5 files each)
+  |   +-- phi_0.01/   (same structure)
+  |   +-- phi_0.05/   (same structure)
+  |   +-- phi_0.10/   (same structure)
+  |   +-- phi_0.20/   (same structure)
+  |   +-- phi_0.30/   (same structure)
+  |
+  +-- 04_equilibration_evidence/
+  |   +-- phi_0.001/
+  |   |     fig_R2_vs_sweep_all_N.png
+  |   |     fig_Rg2_vs_sweep_all_N.png
+  |   +-- phi_0.01/  phi_0.05/  phi_0.10/  phi_0.20/  phi_0.30/  (same)
+  |
+  +-- 05_data/
+  |   +-- tavg_validation_summary.json
+  |   +-- rouse_compliance_heatmap.png       -- 2D PASS/FAIL/MARGINAL map
+  |   +-- phi_0.001/
+  |   |   +-- N25/
+  |   |   |     fig1_static.tsv             -- chain/run, R2, Rg2
+  |   |   |     fig2_seg_msd.tsv            -- sweep, g1
+  |   |   |     fig3_cm_diffusion.tsv       -- sweep, g_CM
+  |   |   |     fig4_autocorr.tsv           -- sweep, gR
+  |   |   |     static_vs_sweep.tsv         -- sweep, phase, R2, Rg2, ratio
+  |   |   +-- N50/  N100/  N250/  N500/    (same 5 files each)
+  |   +-- phi_0.01/  phi_0.05/  phi_0.10/  phi_0.20/  phi_0.30/  (same)
+  |
+  +-- 06_python_scripts/
+        (all scripts, each with docstring, none containing temperature)
 
 
 ==================================================================
 
-Claude AI should run 5 worker agents in parallel. 
+### Success criteria with specific numerical targets:
 
-At the start of each iteration, worker agents will declare and promise that they will finish N-number of requirement tasks from the requirements_list.md. run a "Supervisor" agent to keep an eye on the worker agents so that they don't take a short-cut and miss/ignore requirements. 
+SC-1:  Every item in requirements_list.md is marked [x] COMPLETE.
+SC-2:  Every file in DELIVERABLES exists on disk. All 30 state point data dirs non-empty.
+SC-3:  At phi=0.001 (dilute baseline): 2nu for R2 within [1.15, 1.25], R^2 >= 0.99
+SC-4:  At phi=0.001: D exponent within [-1.05, -0.95], R^2 >= 0.99
+SC-5:  At phi=0.001: tau_R exponent within [2.0, 2.4], R^2 >= 0.99
+SC-6:  At phi=0.001: g1(t) two-regime: short-time [0.50, 0.70], long-time [0.95, 1.05]
+SC-7:  At phi=0.001: g_CM exponent within [0.95, 1.05] for all N
+SC-8:  Every chain at every phi equilibrates in <= 10000 MC sweeps (plateau in R2, Rg2)
+SC-9:  phi* identified and documented for every Rouse property
+SC-10: Compliance heatmap covers all properties x all 6 phi levels
+SC-11: Every plot has title, axis labels with units, legend, fitted exponent, R^2
+SC-12: tavg_validation_summary.json has PASS/FAIL + exponents + phi* for all properties
+SC-13: No Sentinel violations. No temperature parameter in any script.
+SC-14: Only two working files at root: requirements_list.md and iteration_log.txt
+SC-15: README.md documents which Rouse properties are met/not-met, at which phi ranges,
+       comparison to Kuriata models, phi* interpretations, excluded volume confirmation,
+       and l0/d0 = 1.5 documentation
 
-run "Manager" agent to keep an eye on the Supervisor agent so that he does his duty properly. run "Timekeeper" agent to decide if a next iteration will be needed. at the end of each iteartion, "Timekeeper" agent will find out if the worker agents really finished their tasks they promised. If not, the timekeeper will start a new iteration. Claude must not tell me "it is a massive task" coz nothing is massive and even if it is really massive Claude must handle it. Use a file iteration_log.txt for logging the agent acrivities. You must not create any other temporary file for any other purpose coz it creates unnecessary garbages in the project.
+==================================================================
 
-Write a robust, 100% regression-proof, and 100% hand-waving-proof prompt for Claude AI. 
+### Forbidden behaviors (zero tolerance):
+ - Do NOT introduce temperature as a simulation parameter anywhere.
+ - Do NOT run simulations at only one phi value. All six phi levels required
+   for all five N values. Partial density coverage = FAIL.
+ - Do NOT characterize any part of the task as "massive," "too large," or "infeasible."
+ - Do NOT skip, stub, or placeholder any requirement.
+ - Do NOT hard-code expected scaling exponents. Compute from data.
+ - Do NOT omit error bars or R^2 values from any scaling fit.
+ - Do NOT create plots without axis labels, units, and legends.
+ - Do NOT use mock data or synthetic stand-ins at any stage.
+
+==================================================================
+
+Claude AI should run 5 worker agents in parallel, distributed as follows:
+  W1: N=25,  all 6 phi levels
+  W2: N=50,  all 6 phi levels
+  W3: N=100, all 6 phi levels
+  W4: N=250, all 6 phi levels
+  W5: N=500, all 6 phi levels + all cross-phi figures + compliance map
+
+At the start of each iteration, worker agents will declare and promise that they will finish N-number of requirement tasks from the requirements_list.md. run a "Supervisor" agent to keep an eye on the worker agents so that they don't take a short-cut and miss/ignore requirements.
+
+run "Manager" agent to keep an eye on the Supervisor agent so that he does his duty properly.
+
+run "Sentinel" agent independently once per iteration to check for ALL violations:
+  (a) Temporary files other than requirements_list.md and iteration_log.txt
+  (b) Stubs, TODOs, or placeholders in any output file
+  (c) Plots missing axis labels, units, or legend
+  (d) Scaling fits missing R^2 or exponent value
+  (e) Equilibration exceeding 10000 sweeps without documentation
+  (f) Temperature appearing as a simulation parameter in any script
+  (g) Fewer than 6 phi levels simulated for any N value
+  (h) Missing state points in the 30-point matrix
+  (i) Box size inconsistent with the stated phi for any state point
+  (j) RepulsiveEnergy < 1e6 in any simulation config
+  (k) Any claim that Kuriata 2016 specified a phi value -- they did not
+  (l) Compliance heatmap missing phi* analysis
+Sentinel findings cannot be overridden by any other agent.
+
+run "Timekeeper" agent to decide if a next iteration will be needed. at the end of each iteration, "Timekeeper" agent will find out if the worker agents really finished their tasks they promised. Timekeeper verifies files on disk -- never accepts a worker's word. If not, the timekeeper will start a new iteration. No iteration may be closed while any requirement is PENDING, any Sentinel violation is unresolved, Manager has rejected the Supervisor Report, any output file is absent, or any of the 30 state points is missing data.
+
+Claude must not tell me "it is a massive task" coz nothing is massive and even if it is really massive Claude must handle it. Use a file iteration_log.txt for logging the agent activities. You must not create any other temporary file for any other purpose coz it creates unnecessary garbages in the project. Only TWO persistent working files are permitted: requirements_list.md and iteration_log.txt.
+
+Write a robust, 100% regression-proof, and 100% hand-waving-proof prompt for Claude AI.
 
 The prompt should have the structure of an ideal prompt.
 
 Give me the prompt as ASCII text for easy copy-paste.
-             
 

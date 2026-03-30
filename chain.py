@@ -91,6 +91,9 @@ class ChainState:
     All PBC operations go through self.ns (NumberSpace).
     """
 
+    # Relative tolerance for bond-length validation (fraction of l0)
+    BOND_TOL = 0.01  # 1% of equilibrium bond length
+
     def __init__(self, cfg: SimulationConfig):
         self.cfg = cfg
         self.device = cfg.get_torch_device()
@@ -105,6 +108,10 @@ class ChainState:
 
         # Segment info
         self.segments = SegmentInfo(cfg)
+
+        # Bond validation threshold (squared)
+        self._l0 = cfg.l0
+        self._bond_tol_sq = (cfg.l0 * (1.0 + self.BOND_TOL)) ** 2
 
     def initialize_serpentine(self, gen: torch.Generator):
         """Initialize chains on a 3D serpentine grid (matching C# LinearInit)."""
@@ -212,9 +219,52 @@ class ChainState:
         return self.positions[chain_idx, s_start:s_end, :]
 
     def apply_move(self, chain_idx: int, bead_start: int, new_positions: torch.Tensor):
-        """Apply accepted move: overwrite positions for a contiguous bead range."""
+        """Apply accepted move: overwrite positions for a contiguous bead range.
+
+        Validates that bonds at the boundary of the moved segment remain
+        at the equilibrium length l0 (within tolerance).  Raises RuntimeError
+        if a bond is broken — this indicates a bug in the move proposal or
+        unwrapping logic.
+        """
         n_beads = new_positions.shape[0]
         self.positions[chain_idx, bead_start:bead_start + n_beads, :] = new_positions
+        self._validate_boundary_bonds(chain_idx, bead_start, n_beads)
+
+    def _validate_boundary_bonds(self, chain_idx: int, bead_start: int,
+                                   n_beads: int):
+        """Check bonds at the edges of the moved segment.
+
+        Only the two boundary bonds (the bond entering the segment and the
+        bond leaving the segment) can potentially break; interior bonds are
+        preserved by the rigid-body rotation.
+        """
+        ns = self.ns
+        N = self.cfg.N
+        tol_sq = self._bond_tol_sq
+        pos = self.positions[chain_idx]
+
+        # Bond between bead_start-1 and bead_start (if not chain start)
+        if bead_start > 0:
+            d2 = ns.mic_dist_sq(
+                pos[bead_start - 1].unsqueeze(0),
+                pos[bead_start].unsqueeze(0)).item()
+            if d2 > tol_sq:
+                raise RuntimeError(
+                    f"Bond broken: chain {chain_idx}, beads "
+                    f"{bead_start - 1}-{bead_start}, "
+                    f"dist={d2**0.5:.4f} A (l0={self._l0:.1f} A)")
+
+        # Bond between bead_end-1 and bead_end (if not chain end)
+        bead_end = bead_start + n_beads
+        if bead_end < N:
+            d2 = ns.mic_dist_sq(
+                pos[bead_end - 1].unsqueeze(0),
+                pos[bead_end].unsqueeze(0)).item()
+            if d2 > tol_sq:
+                raise RuntimeError(
+                    f"Bond broken: chain {chain_idx}, beads "
+                    f"{bead_end - 1}-{bead_end}, "
+                    f"dist={d2**0.5:.4f} A (l0={self._l0:.1f} A)")
 
     def get_all_flat(self) -> torch.Tensor:
         """Return all positions as flat tensor [total_beads, 3]."""

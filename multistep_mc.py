@@ -285,26 +285,55 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
     ns = state.ns
     device = cfg.get_torch_device()
 
-    # Random permutation of all segments
-    perm = torch.randperm(total_segs, generator=gen, device=device)
+    # ── Build batched permutation with same-chain exclusion ──────────
+    # Group segments into rounds (one segment per chain per round) so
+    # that within each batch, all segments are from different chains.
+    # This prevents the multistep algorithm from breaking boundary bonds
+    # when two same-chain segments are accepted from the same pre-batch state.
+    import random as _random
 
-    # ── Phase 1: Batched multistep segment moves ─────────────────────
     batch_size = MOVE_SIZE
-    n_batches = (total_segs + batch_size - 1) // batch_size
+    segs_per_chain = seg_info.segs_per_chain
+    n_chains = cfg.n_chains
+
+    buckets = [[] for _ in range(n_chains)]
+    for gs in range(total_segs):
+        buckets[seg_info.seg_chain[gs]].append(gs)
+    rng_py = _random.Random(gen.initial_seed())
+    for bucket in buckets:
+        rng_py.shuffle(bucket)
+
+    rounds = []
+    for k in range(segs_per_chain):
+        round_segs = [bucket[k] for bucket in buckets if k < len(bucket)]
+        rng_py.shuffle(round_segs)
+        rounds.append(round_segs)
+
+    perm = []
+    round_boundaries = []
+    for round_segs in rounds:
+        round_boundaries.append(len(perm))
+        perm.extend(round_segs)
+    round_boundaries.append(len(perm))
+
+    batch_ranges = []
+    for ri in range(len(rounds)):
+        r_start = round_boundaries[ri]
+        r_end = round_boundaries[ri + 1]
+        for bs in range(r_start, r_end, batch_size):
+            batch_ranges.append((bs, min(bs + batch_size, r_end)))
+
     # Rebuild cell list every REBUILD_INTERVAL batches to amortize build cost.
-    # Between rebuilds, the cell list is slightly stale but the rank-1
-    # corrections and auto-updating positions_flat view keep energy accurate.
     REBUILD_INTERVAL = 3
 
     batched = cfg.use_batched_mode
 
-    for b in range(n_batches):
-        b_start = b * batch_size
-        b_end = min(b_start + batch_size, total_segs)
+    # ── Phase 1: Batched multistep segment moves ─────────────────────
+    for b_idx, (b_start, b_end) in enumerate(batch_ranges):
 
         # Rebuild cell-list periodically (sequential mode needs it for
         # delta-E and rank-1; batched mode skips — uses direct pairwise)
-        if not batched and b % REBUILD_INTERVAL == 0:
+        if not batched and b_idx % REBUILD_INTERVAL == 0:
             positions_flat = state.get_all_flat()
             energy_comp.rebuild_cell_list(positions_flat)
         elif batched:
@@ -313,7 +342,7 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
         # Propose all moves in this batch
         seg_list = []
         for idx in range(b_start, b_end):
-            global_seg = perm[idx].item()
+            global_seg = perm[idx]
             seg_list.append((seg_info.seg_chain[global_seg],
                              seg_info.seg_local[global_seg]))
 
@@ -398,6 +427,7 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
                 new_pos_gpu = bp.new_pos[i, :nm]
                 positions_cpu[ci, bs:bs + nm] = new_pos_gpu.cpu()
                 state.positions[ci, bs:bs + nm] = new_pos_gpu
+                state._validate_boundary_bonds(ci, bs, nm)
 
                 # Rank-1 update
                 for j in range(i + 1, B):

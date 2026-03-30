@@ -1,583 +1,492 @@
 ================================================================================
-ROUSE MODEL VALIDATION PROMPT FOR SURPASS-ALPHA CG FRAMEWORK
+ROUSE MODEL VALIDATION PROMPT v3.0
 ================================================================================
 
 OBJECTIVE
 =========
 
-Prove that the surpass-alpha coarse-grained (CG) representation:
+Validate that the SURPASS-alpha coarse-grained (CG) polymer representation
+abides by Rouse static and dynamic properties as published in:
 
-  1. Fully abides by ALL Rouse static and dynamic properties listed in:
-       Kuriata, A., Gront, D. & Sikorski, A., CMST 22(4), 179-185 (2016)
+  [REF-1] Kuriata, A., Gront, D. & Sikorski, A., CMST 22(4), 179-185 (2016)
+  [REF-2] Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)
 
-  2. Determines WHICH properties from the original Rouse paper:
-       Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)
-     are met by surpass-alpha, and which are NOT met, with quantitative
-     justification for every conclusion.
+Specifically:
+  (a) Prove compliance with all static and dynamic Rouse properties in [REF-1].
+  (b) Determine which Rouse properties in [REF-2] ARE met by SURPASS-alpha.
+  (c) Determine which Rouse properties in [REF-2] are NOT met by SURPASS-alpha.
+  (d) Map how Rouse property compliance changes across a progression of
+      increasing chain densities (phi), from dilute to dense regimes.
+  (e) Produce publication-quality plots and structured data for all findings.
 
-No hand-waving. No skipping. No "approximately done". Every property either
-passes with a measured exponent, or fails with a documented reason.
+Key physical clarifications confirmed by Dr. Dominik Gront (30 Mar 2026):
+  -- The excluded volume energy E is INFINITE. Any move violating excluded
+     volume is ALWAYS rejected regardless of simulation temperature. This
+     makes the system effectively athermal: temperature is irrelevant to the
+     accept/reject decision because exp(-inf/kBT) = 0 for all finite T.
+  -- Concentration (phi) is NOT fixed at a single value. A progression of
+     increasing densities must be tested to map where and how Rouse behavior
+     is fulfilled, weakened, or broken.
 
 
 CONTEXT
 =======
 
-surpass-alpha is an off-lattice coarse-grained polymer simulation framework
-using Monte Carlo moves. The Rouse model describes the dynamics of a Gaussian
-chain of N beads connected by harmonic springs, each bead experiencing
-independent Langevin friction. With athermal excluded volume added, the chain
-becomes a self-avoiding walk (SAW), and the dynamic exponents shift from ideal
-Rouse to SAW-Rouse values.
+Domain: Computational polymer physics / Monte Carlo simulation of coarse-grained
+        protein chains using the SURPASS-alpha CG framework.
 
-The Kuriata 2016 paper validated a bead-spring Rouse model and a backrub model
-against the same properties we must validate here for surpass-alpha.
+Framework: Python-based Rouse model validation codebase located at:
+  workspace/rouse_model_python/
+
+Checklist reference document:
+  workspace/rouse_model_python/Rouse_theory/rouse_verification_checklist.docx
+
+This checklist defines every testable Rouse property. The checklist must be
+treated as the authoritative and exhaustive task list. Every item in it must be
+addressed. No item may be skipped, abbreviated, or marked "not applicable"
+without explicit documented justification.
+
+Output root directory:
+  D:\git\rouse_python_validation_deliverable_2016_MAR_26\
+
+Reference conditions from [REF-1] (Kuriata 2016):
+  - Excluded volume:  INFINITE hard-core barrier (E -> inf). Any overlapping
+                      move is always rejected. Temperature does not enter the
+                      accept/reject criterion.
+  - Concentration:    Tested across a range. Kuriata 2016 used dilute
+                      (single-chain / infinite dilution) as their baseline.
+                      This validation extends to a density progression.
+  - Scaling targets from [REF-1]:
+      Static:  R2 and Rg2 ~ N^1.20  (nu = 0.5888, SAW regime, dilute limit)
+      Dynamic: g_CM(t) ~ t^1.00
+               g1(t)   ~ t^0.60 (short time), t^1.00 (long time)
+               D       ~ N^-1.00  (Backrub: -1.00, Rouse: -1.01)
+               tau_R   ~ N^2.2    (Backrub: 2.13,  Rouse: 2.30)
 
 
 INPUTS
 ======
 
-  Simulation Parameters:
-    Chain lengths:        N = 25, 50, 100, 250, 500
-    Volume fraction:      phi = 0.035 (constant for all N)
-    Excluded volume:      contactEnergy = 0, RepulsiveEnergy = 1e6 (athermal)
-    MC moves:             Segmented hinge + N-tail + C-tail (local) + pivot (global)
-    Bond spacing:         l0 = 1.5 * sigma = 5.7 A  (sigma = 3.8 A)
-    Temperature:          300 K
-    Initialization:       Random walk for all chain lengths
-    Backend:              Either CPU, or GPU, or a combination of CPU+GPU depending on whichever gives us the best performance
+  1. Checklist:
+       workspace/rouse_model_python/Rouse_theory/rouse_verification_checklist.docx
+       -- Parse this file at the start. Extract all items into requirements_list.md.
 
-  Chain Counts and Sweep Schedule:
-    +-----+--------+-----------+-------------+---------+-------+
-    | N   | Chains | Eq Sweeps | Prod Sweeps | Box (A) | phi   |
-    +-----+--------+-----------+-------------+---------+-------+
-    |  25 |    500 |     2,000 |       5,000 |   269.6 | 0.035 |
-    |  50 |    500 |     5,000 |       5,000 |   339.7 | 0.035 |
-    | 100 |    500 |     5,000 |       5,000 |   428.0 | 0.035 |
-    | 250 |    200 |    10,000 |       5,000 |   428.0 | 0.035 |
-    | 500 |    110 |    25,000 |      10,000 |   441.8 | 0.035 |
-    +-----+--------+-----------+-------------+---------+-------+
+  2. Python codebase:
+       workspace/rouse_model_python/
+       -- Read all existing scripts before writing any new code.
+       -- Do NOT duplicate or conflict with existing implementations.
 
-  Reference Theoretical Values:
-    Static:   2nu = 1.18 (SAW), ratio R2/Rg2 = 6.25 (SAW), 6.0 (ideal)
-    Dynamic:  g_CM exponent = 1.00, g1 short-time exponent = 0.50,
-              D exponent = -1.00, tau_R exponent = 2.18 (SAW)
+  3. References:
+       [REF-1] Kuriata et al. CMST 22(4), 179-185 (2016)
+       [REF-2] Rouse, P.E. Jr. J. Chem. Phys. 21(7), 1272-1280 (1953)
+       -- Use theory from these references to define pass/fail criteria for
+          each property test at each density level.
 
 
 CONSTRAINTS
 ===========
 
-  HARD RULES -- violation by any agent terminates that agent's iteration:
+EXCLUDED VOLUME (FIXED -- NON-NEGOTIABLE):
+  - The excluded volume energy barrier E is INFINITE.
+  - Implementation: any MC move that causes bead overlap (rij <= dk) is
+    ALWAYS rejected with probability 1.
+  - RepulsiveEnergy = 1e6 in SURPASS-alpha is the practical approximation
+    of infinity. Verify that this is large enough that no overlapping
+    configuration is ever accepted. Document this verification.
+  - ContactEnergy = 0 (no attractive interaction of any kind).
+  - Temperature does NOT appear anywhere as a simulation parameter.
+    The Boltzmann accept/reject criterion reduces to: accept if no overlap,
+    reject if overlap. Temperature cancels out completely.
 
-  C1.  Do NOT create any temporary files. The ONLY logging file permitted
-       outside the deliverable structure is:
-         iteration_log.txt   (at the project root)
-       Any other scratch file, temp file, or intermediate dump file is
-       FORBIDDEN. Violations are flagged by Sentinel and logged.
+SURPASS-ALPHA FIXED PARAMETERS:
+  - sigma        = 3.8 A  (Calpha bead diameter, d0)
+  - l0           = 5.7 A  (bond spacing, chosen by Mohammad Nazmul Saqib)
+  - l0/d0        = 1.5    (must be verified against Kuriata Fig. 3 to confirm
+                           it places SURPASS-alpha in the correct SAW scaling
+                           regime yielding 2nu ~ 1.20)
+  - MC moves:    Segmented hinge + N-tail + C-tail (local) + pivot (global)
+  - Init:        Random walk (self-avoiding off-lattice) for ALL chain lengths
+  - Chain lengths N: 25, 50, 100, 250, 500
 
-  C2.  Do NOT claim a requirement is done without a file artifact proving it.
-       A requirement is complete ONLY when its output file exists on disk
-       AND its entry in requirements_list.md is marked [DONE].
+DENSITY PROGRESSION (CORE REQUIREMENT -- confirmed by Dr. Dominik Gront):
+  Simulations MUST be run across the following phi levels for ALL chain lengths.
+  Worker agents must determine chain counts, box sizes, and sweep schedules.
+  Equilibration must occur in <= 10000 sweeps for ALL N at ALL phi levels.
 
-  C3.  Do NOT use approximations or placeholder values. Every exponent must
-       be measured from the simulation data via log-log regression.
+  phi levels: 0.001 (effectively dilute), 0.01, 0.05, 0.10, 0.20, 0.30
 
-  C4.  Do NOT skip any chain length. All five values of N must appear in
-       every scaling plot and every TSV dataset.
+  This gives a 5 x 6 simulation matrix (N x phi) = 30 state points.
 
-  C5.  Do NOT combine separate required plots into one figure to save time.
-       Each of the 15 required figures is a separate file. Period.
+  For each state point, workers must fill this table:
+  +-----+-------+--------+-----------+-------------+---------+
+  | N   | phi   | Chains | Eq Sweeps | Prod Sweeps | Box (A) |
+  +-----+-------+--------+-----------+-------------+---------+
+  |  25 | 0.001 |   ?    |     ?     |      ?      |    ?    |
+  |  25 | 0.01  |   ?    |     ?     |      ?      |    ?    |
+  |  25 | 0.05  |   ?    |     ?     |      ?      |    ?    |
+  |  25 | 0.10  |   ?    |     ?     |      ?      |    ?    |
+  |  25 | 0.20  |   ?    |     ?     |      ?      |    ?    |
+  |  25 | 0.30  |   ?    |     ?     |      ?      |    ?    |
+  |  50 | 0.001 |   ?    |     ?     |      ?      |    ?    |
+  | ... | ...   |  ...   |    ...    |     ...     |   ...   |
+  | 500 | 0.30  |   ?    |     ?     |      ?      |    ?    |
+  +-----+-------+--------+-----------+-------------+---------+
 
-  C6.  Do NOT hallucinate exponents. If a fit fails, report it as FAIL with
-       the raw data shown, not with a made-up number.
+  Box size derivation: L_box = sigma * (N_chains * N / phi)^(1/3)
+  Document derivation for every state point. Verify L_box is consistent
+  with phi for each entry.
 
-  C7.  The requirements_list.md must be created BEFORE any simulation or
-       analysis begins. It must track every requirement with [TODO]/[DONE].
+  Parallelization: independent state points are trivially parallel.
+  The framework must support both CPU and GPU parallelization.
+  Assign state points across workers to maximize parallel throughput.
 
-  C8.  Python scripts must be saved in 06_python_scripts/ and must be
-       self-contained and runnable.
+FILE RULES:
+  - Only TWO persistent working files are permitted:
+      requirements_list.md    (task registry -- never delete)
+      iteration_log.txt       (agent activity log -- never delete)
+  - No other temporary files of any kind may be created at any time.
+  - All final output files go to the directory structure in DELIVERABLES.
 
-  C9. All output must go to:
-         D:\git\rouse_python_validation_deliverable_2016_MAR_26\
-       with the exact directory structure specified below.
+FORBIDDEN BEHAVIORS (ZERO TOLERANCE):
+  - Do NOT introduce temperature as a simulation parameter anywhere.
+  - Do NOT run simulations at only one phi value. All six phi levels are
+    required for all five N values. Partial density coverage = FAIL.
+  - Do NOT characterize any part of the task as "massive," "too large,"
+    or "infeasible." Every state point WILL be completed.
+  - Do NOT skip, stub, or placeholder any requirement.
+  - Do NOT hard-code expected scaling exponents. Compute from data.
+  - Do NOT omit error bars or R^2 values from any scaling fit.
+  - Do NOT create plots without axis labels, units, and legends.
+  - Do NOT use mock data or synthetic stand-ins at any stage.
 
 
 EXECUTION PLAN
 ==============
 
-  PHASE 0 -- PRE-ITERATION SETUP (before any worker loop begins)
-  ---------------------------------------------------------------
-  Step 0.1  Create requirements_list.md at project root.
-            List every requirement from this prompt as a numbered item
-            with status [TODO]. This file is the ground truth for all
-            agents.
+PHASE 0 -- INITIALIZATION (before any iteration begins):
+  Step 0.1: Parse rouse_verification_checklist.docx completely.
+  Step 0.2: Create requirements_list.md with every checklist item numbered,
+            described, and marked [ ] PENDING.
+  Step 0.3: Create iteration_log.txt with header: date, prompt version, agents.
+  Step 0.4: Read all existing Python scripts in workspace/rouse_model_python/.
+  Step 0.5: Fill the full 30-row simulation table above. Document all
+            derivations of chain count and box size from phi and N.
+  Step 0.6: Verify RepulsiveEnergy = 1e6 is effectively infinite by confirming
+            no overlapping configuration is ever accepted in a test run.
+            Document this verification in iteration_log.txt.
+  Step 0.7: Create the full output directory tree under the output root.
 
-  Step 0.2  Create iteration_log.txt at project root.
-            Format each entry as:
-              [ITER {i}] [AGENT {name}] [ACTION] {description}
+PHASE 1 -- STATIC PROPERTIES (01_static_properties/):
+  For each (N, phi) state point in the 30-point matrix:
+    1.1  Run MC simulation to equilibration. Verify R2 and Rg2 converge.
+    1.2  Collect production trajectory.
+    1.3  Compute ensemble-averaged <R2>.
+    1.4  Compute ensemble-averaged <Rg2>.
+    1.5  Compute ratio <R2>/<Rg2>.
+    1.6  Fit power law vs N at this phi: <R2> ~ N^(2nu). Record 2nu and R^2.
+    1.7  Fit power law vs N at this phi: <Rg2> ~ N^(2nu). Record 2nu and R^2.
+    1.8  Save data to 05_data/phi_{phi}/N{N}/fig1_static.tsv.
+    1.9  Save sweep-resolved data to 05_data/phi_{phi}/N{N}/static_vs_sweep.tsv.
 
-  Step 0.3  Create the full directory tree:
-              D:\git\rouse_python_validation_deliverable_2016_MAR_26\
-                01_static_properties\
-                02_dynamic_properties\
-                03_per_chain_length\N25\
-                03_per_chain_length\N50\
-                03_per_chain_length\N100\
-                03_per_chain_length\N250\
-                03_per_chain_length\N500\
-                04_equilibration_evidence\
-                05_data\N25\
-                05_data\N50\
-                05_data\N100\
-                05_data\N250\
-                05_data\N500\
-                06_python_scripts\
+  Cross-phi analysis:
+    1.10 Plot 2nu (from R2) vs phi -- how does scaling exponent change with
+         density? Mark Kuriata target (2nu = 1.20) as reference line.
+    1.11 Plot <R2>/<Rg2> ratio vs phi for all N overlaid.
+    1.12 Generate all figures in 01_static_properties/ (see DELIVERABLES).
 
-  PHASE 1 -- SIMULATION AND DATA COLLECTION (Worker Agents)
-  ----------------------------------------------------------
-  For each N in {25, 50, 100, 250, 500}:
+PHASE 2 -- DYNAMIC PROPERTIES (02_dynamic_properties/):
+  For each (N, phi) state point:
+    2.1  Compute g1(t): MSD of middle segment (index ~ N/2).
+    2.2  Compute g_CM(t): MSD of chain center of mass.
+    2.3  Compute diffusion coefficient D from long-time slope of g_CM(t).
+    2.4  Compute tau_R from end-to-end autocorrelation gR(t) using
+         equations (8) and (9) from [REF-1].
+    2.5  Save all dynamic data to 05_data/phi_{phi}/N{N}/ (see DELIVERABLES).
 
-    Step 1.1  Initialize the surpass-alpha system:
-                - Random walk chain initialization
-                - Box size as specified in the table
-                - Athermal excluded volume parameters
-                - All four MC move types enabled
+  Cross-phi analysis:
+    2.6  Plot D vs N at each phi level overlaid. Show how D ~ N^-1 breaks
+         down as phi increases.
+    2.7  Plot tau_R vs N at each phi level overlaid. Show exponent drift
+         with density.
+    2.8  Plot g1(t) short-time exponent vs phi. Mark theoretical 0.5 and
+         Kuriata observed 0.60 as reference lines.
+    2.9  Generate all figures in 02_dynamic_properties/ (see DELIVERABLES).
 
-    Step 1.2  Run equilibration for Eq_Sweeps sweeps.
-              Record R2 and Rg2 every sweep -> static_vs_sweep.tsv
-              (columns: sweep, phase, R2, Rg2, R2_over_Rg2)
+PHASE 3 -- EQUILIBRATION EVIDENCE (04_equilibration_evidence/):
+  3.1  For each phi level: plot R2 vs MC sweep for all N overlaid.
+       All curves must plateau within <= 10000 sweeps.
+  3.2  For each phi level: plot Rg2 vs MC sweep for all N overlaid.
+  3.3  Save all equilibration figures to 04_equilibration_evidence/.
 
-    Step 1.3  Run production for Prod_Sweeps sweeps.
-              At every sweep snapshot, for every chain compute:
-                - R2 = |r_N - r_1|^2
-                - Rg2 = mean squared distance from center of mass
-              Save final production snapshot:
-                -> fig1_static_N{N}_s42.tsv  (columns: chain, R2, Rg2)
+PHASE 4 -- PER STATE POINT FIGURES (03_per_state_point/):
+  For each (N, phi):
+    4.1  R2_vs_MC_sweep.png
+    4.2  Rg2_vs_MC_sweep.png
+    4.3  g1_middle_segment_msd.png
+    4.4  gcm_center_of_mass_msd.png
+    4.5  autocorrelation_end_to_end_vector.png
 
-    Step 1.4  Compute MSD of middle segment (bead index N//2):
-              g1(t) = < |r_{N/2}(sweep) - r_{N/2}(0)|^2 >
-              Average over all chains.
-                -> fig2_seg20_msd_N{N}_s42.tsv  (columns: sweep, g1)
+PHASE 5 -- ROUSE COMPLIANCE MAP (05_rouse_compliance_map/):
+  This is the key scientific deliverable arising from the density progression.
+  5.1  For every Rouse property in [REF-1] and [REF-2], at every phi level:
+       assign PASS/FAIL using the criteria in SUCCESS CRITERIA below.
+  5.2  Produce a 2D compliance heatmap: rows = Rouse properties,
+       columns = phi levels. Cells = PASS (green) / FAIL (red) / MARGINAL
+       (yellow, within 15% of threshold).
+  5.3  Identify the critical phi* above which each Rouse property begins to
+       fail. Document phi* for every property.
+  5.4  Write tavg_validation_summary.json with all metrics, pass/fail
+       verdicts, and phi* values.
+  5.5  Write README.md summarizing all findings.
 
-    Step 1.5  Compute MSD of center of mass:
-              g_CM(t) = < |r_CM(sweep) - r_CM(0)|^2 >
-              Average over all chains.
-                -> fig3_seg20_diffusion_N{N}_s42.tsv  (columns: sweep, g_CM)
-
-    Step 1.6  Compute end-to-end vector autocorrelation:
-              g_R(t) = < R(0) . R(sweep) > / < R^2 >
-              Average over all chains.
-                -> fig4_seg20_autocorr_N{N}_s42.tsv  (columns: sweep, gR)
-
-  PHASE 2 -- ANALYSIS AND SCALING (Worker Agents)
-  ------------------------------------------------
-  Step 2.1  From fig1_static data, compute ensemble mean <R2> and <Rg2>
-            for each N. Fit log(<R2>) vs log(N) -> exponent 2nu_R2.
-            Fit log(<Rg2>) vs log(N) -> exponent 2nu_Rg2.
-            Compute ratio <R2>/<Rg2> for each N.
-
-  Step 2.2  From fig3 data, extract diffusion coefficient D for each N:
-            D = g_CM(t) / (6t) in the linear regime.
-            Fit log(D) vs log(N) -> exponent alpha_D.
-
-  Step 2.3  From fig4 data, fit g_R(t) ~ exp(-t/tau_R) for each N.
-            Extract tau_R. Fit log(tau_R) vs log(N) -> exponent alpha_tau.
-
-  Step 2.4  From fig2 data, fit g1(t) ~ t^beta in the short-time regime
-            (t < tau_R). Extract beta for each N.
-
-  Step 2.5  Compile all measured exponents into:
-              05_data\tavg_validation_summary.json
-            Format:
-            {
-              "R2_exponent":  { "measured": X.XX, "theory": 1.18, "pass": true/false },
-              "Rg2_exponent": { "measured": X.XX, "theory": 1.18, "pass": true/false },
-              "R2_Rg2_ratio": { "measured": X.XX, "theory": 6.25, "pass": true/false },
-              "D_exponent":   { "measured": X.XX, "theory": -1.00, "pass": true/false },
-              "tau_R_exponent":{"measured": X.XX, "theory": 2.18,  "pass": true/false },
-              "g_CM_exponent": { "measured": X.XX, "theory": 1.00,  "pass": true/false },
-              "g1_exponent":   { "measured": X.XX, "theory": 0.50,  "pass": true/false },
-              "rouse_1953_properties": {
-                "1.1_gaussian_submolecule":  "MET / NOT MET -- reason",
-                "1.2_R2_scaling":            "MET / NOT MET -- reason",
-                "1.3_Rg2_scaling":           "MET / NOT MET -- reason",
-                "1.4_ratio_R2_Rg2":          "MET / NOT MET -- reason",
-                "1.5_config_probability":    "MET / NOT MET -- reason",
-                "2.1_eigenvalues":           "MET / NOT MET -- reason",
-                "2.2_relaxation_times":      "MET / NOT MET -- reason",
-                "2.3_long_wavelength_approx":"MET / NOT MET -- reason",
-                "2.4_tau_R_scaling":         "MET / NOT MET -- reason",
-                "2.5_steady_flow_viscosity": "MET / NOT MET -- reason",
-                "2.6_complex_viscosity":     "MET / NOT MET -- reason",
-                "2.7_shear_modulus":         "MET / NOT MET -- reason",
-                "2.8_high_freq_approx":      "MET / NOT MET -- reason",
-                "2.9_diffusion_coeff":       "MET / NOT MET -- reason",
-                "2.10_g_CM":                 "MET / NOT MET -- reason",
-                "2.11_g1_middle_segment":    "MET / NOT MET -- reason",
-                "2.12_end_to_end_autocorr":  "MET / NOT MET -- reason"
-              }
-            }
-
-  PHASE 3 -- FIGURE GENERATION (Worker Agents)
-  ---------------------------------------------
-  Generate exactly these 15 figures, each as a separate PNG file.
-  Use log-log axes where scaling is tested. Show regression lines and
-  measured exponents in figure legends. Use consistent colors across N.
-
-  [FIG 01]  01_static_properties\fig_R2_vs_N.png
-            Log-log plot of <R2> vs N. Regression line. Measured 2nu.
-
-  [FIG 02]  01_static_properties\fig_Rg2_vs_N.png
-            Log-log plot of <Rg2> vs N. Regression line. Measured 2nu.
-
-  [FIG 03]  01_static_properties\fig_R2_Rg2_combined_vs_N.png
-            Both <R2> and <Rg2> on same log-log axes. Both regression lines.
-
-  [FIG 04]  01_static_properties\fig_ratio_R2_over_Rg2_vs_N.png
-            <R2>/<Rg2> vs N (linear x-axis). Horizontal reference at 6.25.
-
-  [FIG 05]  02_dynamic_properties\fig_g1_middle_segment_msd_vs_sweep.png
-            g1(t) for all N overlaid. Log-log axes. Reference slope t^0.5.
-
-  [FIG 06]  02_dynamic_properties\fig_gcm_center_of_mass_msd_vs_sweep.png
-            g_CM(t) for all N overlaid. Log-log axes. Reference slope t^1.
-
-  [FIG 07]  02_dynamic_properties\fig_diffusion_coefficient_D_vs_N.png
-            Log-log plot of D vs N. Regression line. Measured exponent.
-
-  [FIG 08]  02_dynamic_properties\fig_relaxation_time_tau_R_vs_N.png
-            Log-log plot of tau_R vs N. Regression line. Measured exponent.
-
-  [FIG 09-13] For each N in {25, 50, 100, 250, 500}:
-    03_per_chain_length\N{N}\R2_vs_MC_sweep.png
-    03_per_chain_length\N{N}\Rg2_vs_MC_sweep.png
-    03_per_chain_length\N{N}\g1_middle_segment_msd.png
-    03_per_chain_length\N{N}\gcm_center_of_mass_msd.png
-    03_per_chain_length\N{N}\autocorrelation_end_to_end_vector.png
-
-  [FIG 14]  04_equilibration_evidence\fig_R2_vs_MC_sweep_all_N.png
-            R2 vs MC sweep for all N, equilibration + production phases
-            marked by a vertical dashed line.
-
-  [FIG 15]  04_equilibration_evidence\fig_Rg2_vs_MC_sweep_all_N.png
-            Rg2 vs MC sweep for all N. Same phase marking.
-
-  PHASE 4 -- README AND GITATTRIBUTES (Worker Agent)
-  ---------------------------------------------------
-  Step 4.1  Write README.md at project root. Must include:
-            - Purpose of the validation campaign
-            - All simulation parameters
-            - Directory guide with description of every file
-            - Summary table of measured vs theoretical exponents
-            - Clear statement of which Rouse 1953 properties are MET
-              and which are NOT MET, with justification
-            - Reference list (Rouse 1953, Kuriata 2016)
-
-  Step 4.2  Write .gitattributes at project root.
-            Mark all TSV and PNG files as binary/LFS if appropriate.
-            At minimum: *.tsv  text eol=lf
+PHASE 6 -- SCRIPTS ARCHIVE (06_python_scripts/):
+  6.1  Copy all Python scripts to 06_python_scripts/.
+  6.2  Each script must include a docstring: purpose, inputs, outputs, usage.
+  6.3  No script may contain temperature as a simulation parameter.
+       Sentinel will verify this by scanning all script files.
 
 
 AGENT ARCHITECTURE
 ==================
 
-  WORKER AGENTS (5 agents running in parallel)
-  --------------------------------------------
-  - At the START of each iteration, each Worker Agent declares in
-    iteration_log.txt the EXACT list of requirement IDs it promises
-    to complete this iteration. Example:
-      [ITER 1] [WORKER-A] [PROMISE] Will complete: REQ-01, REQ-03, REQ-07
+FIVE WORKER AGENTS (W1 -- W5):
+  The 30 state points are distributed across workers as follows:
+    W1: N=25,  all 6 phi levels
+    W2: N=50,  all 6 phi levels
+    W3: N=100, all 6 phi levels
+    W4: N=250, all 6 phi levels
+    W5: N=500, all 6 phi levels + all cross-phi figures + compliance map
 
-  - Workers execute their promised requirements and mark each [DONE]
-    in requirements_list.md upon verified file creation.
+  Each worker MUST at the start of each iteration:
+    (a) Read requirements_list.md.
+    (b) Declare explicitly which REQ IDs it will complete this iteration.
+    (c) Promise no shortcuts, stubs, or skipped sub-steps.
+  Each worker logs start, commits, progress, and completion to iteration_log.txt.
 
-  - Workers are forbidden from marking a requirement [DONE] without
-    the corresponding output file existing on disk.
+SUPERVISOR AGENT:
+  - Monitors all five workers throughout each iteration.
+  - At iteration end, reviews every commit against requirements_list.md.
+  - Flags any commit that is incomplete, stubbed, missing, incorrect,
+    or contains temperature as a simulation parameter.
+  - Verifies that all 30 state points are covered -- not just a subset.
+  - Writes Supervisor Report to iteration_log.txt with verdict per commit.
+  - Cannot approve iteration as complete if any commit is flagged.
 
-  - Workers log completion:
-      [ITER 1] [WORKER-A] [DONE] REQ-01: fig_R2_vs_N.png written to 01_static_properties\
+MANAGER AGENT:
+  - Monitors the Supervisor.
+  - Verifies Supervisor checked EVERY commit with quantitative evidence.
+  - Verifies Supervisor confirmed all 6 phi levels present for all 5 N.
+  - Rejects Supervisor Report if superficial. Requires redo.
+  - Writes Manager Verdict to iteration_log.txt.
 
-  - Workers log failures honestly:
-      [ITER 1] [WORKER-A] [FAIL] REQ-07: fit diverged, raw data in 05_data\N500\fig3...tsv
+TIMEKEEPER AGENT:
+  - Acts after Manager Verdict.
+  - Reads requirements_list.md, counts PENDING items.
+  - Verifies all declared output files exist on disk.
+  - Verifies all 30 state point data directories exist and are non-empty.
+  - Opens new iteration if anything is missing.
+  - Writes DONE only when everything is complete and verified on disk.
+  - Never accepts a worker's word. Verifies files on disk only.
 
-
-  SUPERVISOR AGENT
-  ----------------
-  - Monitors all 5 Worker Agents during each iteration.
-  - After each Worker completes a promise, Supervisor:
-      (a) Checks that the file actually exists on disk.
-      (b) Checks that requirements_list.md is updated to [DONE].
-      (c) Checks that iteration_log.txt has the completion entry.
-  - If any check fails, Supervisor logs:
-      [ITER 1] [SUPERVISOR] [VIOLATION] WORKER-A claimed REQ-01 done but file missing.
-    and resets that requirement to [TODO].
-  - Supervisor is NOT allowed to skip checks to save time.
-  - Supervisor reports to Manager at end of each iteration:
-      [ITER 1] [SUPERVISOR] [REPORT] X requirements verified done, Y violations found.
-
-
-  MANAGER AGENT
-  -------------
-  - Monitors the Supervisor Agent.
-  - After Supervisor's end-of-iteration report, Manager:
-      (a) Independently spot-checks 20% of [DONE] items by verifying
-          file existence and content validity (file not empty, correct columns).
-      (b) If Manager finds a [DONE] item that is invalid, Manager logs:
-            [ITER 1] [MANAGER] [ESCALATION] Supervisor failed to catch invalid
-            completion of REQ-07. Resetting to [TODO].
-          and resets it to [TODO].
-      (c) If Supervisor skipped checks, Manager flags:
-            [ITER 1] [MANAGER] [WARNING] Supervisor skipped verification of WORKER-C.
-  - Manager does NOT execute requirements directly.
-  - Manager logs its assessment:
-      [ITER 1] [MANAGER] [ASSESSMENT] Supervisor performance: adequate / inadequate.
-
-
-  TIMEKEEPER AGENT
-  ----------------
-  - Runs at the END of each iteration.
-  - Reads requirements_list.md and counts [TODO] vs [DONE].
-  - Reads iteration_log.txt and verifies every PROMISE from this iteration
-    has a matching DONE or FAIL entry from the same Worker.
-  - If any promise is unaccounted for (neither DONE nor FAIL), Timekeeper
-    treats it as [TODO] and logs:
-      [ITER 1] [TIMEKEEPER] [UNACCOUNTED] WORKER-B promised REQ-12 but no outcome logged.
-  - Decision logic:
-      IF all items in requirements_list.md are [DONE]:
-        Log: [ITER 1] [TIMEKEEPER] [COMPLETE] All requirements done. No further iteration.
-        Halt.
-      ELSE:
-        Log: [ITER 1] [TIMEKEEPER] [CONTINUE] {count} requirements remain. Starting ITER 2.
-        Start next iteration.
-  - Timekeeper does NOT give extensions or accept excuses.
-  - Timekeeper is not allowed to declare completion if any [TODO] items remain.
-
-
-  SENTINEL AGENT
-  --------------
-  - Runs continuously throughout every iteration (not just at the end).
-  - Enforces CONSTRAINT C1 at all times: scans the project directory
-    for any file not in the approved deliverable structure and not named
-    iteration_log.txt or requirements_list.md.
-  - If an unauthorized file is found:
-      [ITER 1] [SENTINEL] [VIOLATION] Unauthorized file found: tmp_debug.tsv. Deleting.
-    and deletes it immediately.
-  - Also enforces C2: if a Worker marks [DONE] in requirements_list.md,
-    Sentinel verifies the file exists before the mark is accepted.
-  - Sentinel reports a violation summary to Manager at end of each iteration.
+SENTINEL AGENT:
+  - Runs independently once per iteration.
+  - Checks for ALL of the following violations:
+      (a) Temporary files other than requirements_list.md and iteration_log.txt
+      (b) Stubs, TODOs, or placeholders in any output file
+      (c) Plots missing axis labels, units, or legend
+      (d) Scaling fits missing R^2 or exponent value
+      (e) Equilibration exceeding 10000 sweeps without documentation
+      (f) Temperature appearing as a simulation parameter in any script
+      (g) Fewer than 6 phi levels simulated for any N value
+      (h) Missing state points in the 30-point matrix
+      (i) Box size inconsistent with the stated phi for any state point
+      (j) RepulsiveEnergy < 1e6 in any simulation config
+      (k) Any claim that Kuriata 2016 specified a phi value -- they did not
+      (l) Compliance heatmap missing phi* analysis
+  - Lists all violations under SENTINEL ALERT in iteration_log.txt.
+  - Blocks iteration closure until all violations are resolved.
+  - Sentinel findings cannot be overridden by any other agent.
 
 
 ITERATIVE PROCESS
 =================
 
-  Loop structure:
+LOOP STRUCTURE:
 
-    iteration = 1
-    WHILE any requirement in requirements_list.md is [TODO]:
+  ITERATION N:
+  |
+  +-- [PHASE 0 on first iteration only]
+  |
+  +-- W1, W2, W3, W4, W5 declare commits --> execute in parallel
+  |
+  +-- Supervisor reviews all commits --> writes Supervisor Report
+  |
+  +-- Manager reviews Supervisor Report --> writes Manager Verdict
+  |
+  +-- Sentinel runs independently --> writes SENTINEL ALERT if violations
+  |
+  +-- Timekeeper counts pending items + verifies files on disk
+  |   |
+  |   +-- Pending > 0 or files missing? --> open ITERATION N+1
+  |   |
+  |   +-- All complete + all files exist? --> DONE
 
-      LOG: [ITER {iteration}] [TIMEKEEPER] [START] Beginning iteration {iteration}.
-
-      -- WORKER PHASE --
-      Each of 5 Worker Agents:
-        1. Reads requirements_list.md for all [TODO] items.
-        2. Claims a non-overlapping subset (no two workers claim the same req).
-        3. Declares promises in iteration_log.txt.
-        4. Executes requirements.
-        5. Marks completed items [DONE] in requirements_list.md.
-        6. Logs DONE or FAIL for each promise.
-
-      -- SENTINEL PHASE (continuous) --
-      Sentinel monitors file creation throughout the worker phase.
-
-      -- SUPERVISOR PHASE --
-      Supervisor verifies all Worker completions.
-      Logs REPORT to iteration_log.txt.
-
-      -- MANAGER PHASE --
-      Manager spot-checks Supervisor's work.
-      Logs ASSESSMENT to iteration_log.txt.
-
-      -- TIMEKEEPER PHASE --
-      Timekeeper counts remaining [TODO] items.
-      Checks all promises are accounted for.
-      Decides: COMPLETE or CONTINUE.
-
-      iteration += 1
-
-    END WHILE
+PROHIBITION: No iteration may be closed while:
+  - Any requirement is [ ] PENDING in requirements_list.md
+  - Any Sentinel violation is unresolved
+  - Manager has rejected the Supervisor Report
+  - Any declared output file is absent from disk
+  - Any of the 30 state points is missing data
 
 
 REQUIREMENTS
 ============
 
-  Create requirements_list.md BEFORE starting iteration 1.
-  It must contain every numbered requirement below with status [TODO].
-  Update status to [DONE] only when the file artifact exists on disk.
+Create requirements_list.md at the start of Phase 0, BEFORE any simulation.
 
-  REQ-00  Create requirements_list.md (this file itself) -- [DONE when created]
-  REQ-01  Create full directory tree under deliverable root
-  REQ-02  Run simulation for N=25 (equilibration + production)
-  REQ-03  Run simulation for N=50
-  REQ-04  Run simulation for N=100
-  REQ-05  Run simulation for N=250
-  REQ-06  Run simulation for N=500
-  REQ-07  Write static_vs_sweep.tsv for N=25
-  REQ-08  Write static_vs_sweep.tsv for N=50
-  REQ-09  Write static_vs_sweep.tsv for N=100
-  REQ-10  Write static_vs_sweep.tsv for N=250
-  REQ-11  Write static_vs_sweep.tsv for N=500
-  REQ-12  Write fig1_static_N25_s42.tsv
-  REQ-13  Write fig1_static_N50_s42.tsv
-  REQ-14  Write fig1_static_N100_s42.tsv
-  REQ-15  Write fig1_static_N250_s42.tsv
-  REQ-16  Write fig1_static_N500_s42.tsv
-  REQ-17  Write fig2_seg20_msd_N25_s42.tsv
-  REQ-18  Write fig2_seg20_msd_N50_s42.tsv
-  REQ-19  Write fig2_seg20_msd_N100_s42.tsv
-  REQ-20  Write fig2_seg20_msd_N250_s42.tsv
-  REQ-21  Write fig2_seg20_msd_N500_s42.tsv
-  REQ-22  Write fig3_seg20_diffusion_N25_s42.tsv
-  REQ-23  Write fig3_seg20_diffusion_N50_s42.tsv
-  REQ-24  Write fig3_seg20_diffusion_N100_s42.tsv
-  REQ-25  Write fig3_seg20_diffusion_N250_s42.tsv
-  REQ-26  Write fig3_seg20_diffusion_N500_s42.tsv
-  REQ-27  Write fig4_seg20_autocorr_N25_s42.tsv
-  REQ-28  Write fig4_seg20_autocorr_N50_s42.tsv
-  REQ-29  Write fig4_seg20_autocorr_N100_s42.tsv
-  REQ-30  Write fig4_seg20_autocorr_N250_s42.tsv
-  REQ-31  Write fig4_seg20_autocorr_N500_s42.tsv
-  REQ-32  Fit R2 scaling exponent across all N
-  REQ-33  Fit Rg2 scaling exponent across all N
-  REQ-34  Compute R2/Rg2 ratio for all N
-  REQ-35  Fit D vs N exponent
-  REQ-36  Fit tau_R vs N exponent
-  REQ-37  Fit g1 short-time exponent for all N
-  REQ-38  Fit g_CM exponent for all N
-  REQ-39  Write tavg_validation_summary.json with all exponents + pass/fail
-          including MET/NOT MET assessment for all 17 Rouse 1953 properties
-  REQ-40  Generate FIG 01: fig_R2_vs_N.png
-  REQ-41  Generate FIG 02: fig_Rg2_vs_N.png
-  REQ-42  Generate FIG 03: fig_R2_Rg2_combined_vs_N.png
-  REQ-43  Generate FIG 04: fig_ratio_R2_over_Rg2_vs_N.png
-  REQ-44  Generate FIG 05: fig_g1_middle_segment_msd_vs_sweep.png
-  REQ-45  Generate FIG 06: fig_gcm_center_of_mass_msd_vs_sweep.png
-  REQ-46  Generate FIG 07: fig_diffusion_coefficient_D_vs_N.png
-  REQ-47  Generate FIG 08: fig_relaxation_time_tau_R_vs_N.png
-  REQ-48  Generate per-chain figures for N=25 (5 plots)
-  REQ-49  Generate per-chain figures for N=50 (5 plots)
-  REQ-50  Generate per-chain figures for N=100 (5 plots)
-  REQ-51  Generate per-chain figures for N=250 (5 plots)
-  REQ-52  Generate per-chain figures for N=500 (5 plots)
-  REQ-53  Generate FIG 14: fig_R2_vs_MC_sweep_all_N.png
-  REQ-54  Generate FIG 15: fig_Rg2_vs_MC_sweep_all_N.png
-  REQ-55  Write all Python scripts to 06_python_scripts\ (runnable, self-contained)
-  REQ-56  Write README.md with full summary table and Rouse 1953 assessment
-  REQ-57  Write .gitattributes
+Format:
+  [REQ-001] [ ] PENDING  -- <description from checklist item 1>
+  [REQ-002] [ ] PENDING  -- <description from checklist item 2>
+  ...
+  [REQ-NNN] [ ] PENDING  -- <description from checklist item N>
+
+Every checklist item from rouse_verification_checklist.docx = one REQ entry.
+No merging, no splitting, no omissions.
+
+On completion:
+  [REQ-NNN] [x] COMPLETE -- completed by W? in iteration ?
+
+Timekeeper verifies this file at the end of every iteration.
 
 
 DELIVERABLES
 ============
 
-  Root: D:\git\rouse_python_validation_deliverable_2016_MAR_26\
+Output root: D:\git\rouse_python_validation_deliverable_2016_MAR_26\
 
-  requirements_list.md            -- requirement tracker (REQ-00 to REQ-57)
-  iteration_log.txt               -- agent activity log (the ONLY extra file allowed)
-  README.md                       -- full project description + results summary
-  .gitattributes                  -- line ending rules
-
-  01_static_properties\
-    fig_R2_vs_N.png               -- [REQ-40]
-    fig_Rg2_vs_N.png              -- [REQ-41]
-    fig_R2_Rg2_combined_vs_N.png  -- [REQ-42]
-    fig_ratio_R2_over_Rg2_vs_N.png-- [REQ-43]
-
-  02_dynamic_properties\
-    fig_g1_middle_segment_msd_vs_sweep.png    -- [REQ-44]
-    fig_gcm_center_of_mass_msd_vs_sweep.png   -- [REQ-45]
-    fig_diffusion_coefficient_D_vs_N.png      -- [REQ-46]
-    fig_relaxation_time_tau_R_vs_N.png        -- [REQ-47]
-
-  03_per_chain_length\N{N}\  (N = 25, 50, 100, 250, 500)
-    R2_vs_MC_sweep.png
-    Rg2_vs_MC_sweep.png
-    g1_middle_segment_msd.png
-    gcm_center_of_mass_msd.png
-    autocorrelation_end_to_end_vector.png
-
-  04_equilibration_evidence\
-    fig_R2_vs_MC_sweep_all_N.png  -- [REQ-53]
-    fig_Rg2_vs_MC_sweep_all_N.png -- [REQ-54]
-
-  05_data\
-    tavg_validation_summary.json  -- [REQ-39]
-    N{N}\
-      fig1_static_N{N}_s42.tsv
-      fig2_seg20_msd_N{N}_s42.tsv
-      fig3_seg20_diffusion_N{N}_s42.tsv
-      fig4_seg20_autocorr_N{N}_s42.tsv
-      static_vs_sweep.tsv
-
-  06_python_scripts\
-    (all Python scripts used, self-contained, runnable)
+rouse_python_validation_deliverable_2016_MAR_26/
+  |
+  +-- README.md
+  +-- .gitattributes
+  +-- requirements_list.md
+  +-- iteration_log.txt
+  |
+  +-- 01_static_properties/
+  |     fig_R2_vs_N_per_phi.png              -- R2 vs N, one curve per phi
+  |     fig_Rg2_vs_N_per_phi.png             -- Rg2 vs N, one curve per phi
+  |     fig_2nu_vs_phi.png                   -- scaling exponent vs phi
+  |     fig_ratio_R2_Rg2_vs_phi.png          -- ratio vs phi, all N overlaid
+  |     fig_R2_Rg2_combined_dilute.png       -- combined plot at phi=0.001
+  |
+  +-- 02_dynamic_properties/
+  |     fig_g1_vs_sweep_per_phi.png          -- g1(t) at each phi, all N
+  |     fig_gcm_vs_sweep_per_phi.png         -- g_CM(t) at each phi, all N
+  |     fig_D_vs_N_per_phi.png               -- D vs N, one curve per phi
+  |     fig_tauR_vs_N_per_phi.png            -- tau_R vs N, one curve per phi
+  |     fig_D_exponent_vs_phi.png            -- D scaling exponent vs phi
+  |     fig_tauR_exponent_vs_phi.png         -- tau_R exponent vs phi
+  |     fig_g1_shorttime_exponent_vs_phi.png -- short-time g1 exponent vs phi
+  |
+  +-- 03_per_state_point/
+  |   +-- phi_0.001/
+  |   |   +-- N25/
+  |   |   |     R2_vs_MC_sweep.png
+  |   |   |     Rg2_vs_MC_sweep.png
+  |   |   |     g1_middle_segment_msd.png
+  |   |   |     gcm_center_of_mass_msd.png
+  |   |   |     autocorrelation_end_to_end_vector.png
+  |   |   +-- N50/  N100/  N250/  N500/  (same 5 files each)
+  |   +-- phi_0.01/   (same structure)
+  |   +-- phi_0.05/   (same structure)
+  |   +-- phi_0.10/   (same structure)
+  |   +-- phi_0.20/   (same structure)
+  |   +-- phi_0.30/   (same structure)
+  |
+  +-- 04_equilibration_evidence/
+  |   +-- phi_0.001/
+  |   |     fig_R2_vs_sweep_all_N.png
+  |   |     fig_Rg2_vs_sweep_all_N.png
+  |   +-- phi_0.01/  phi_0.05/  phi_0.10/  phi_0.20/  phi_0.30/  (same)
+  |
+  +-- 05_data/
+  |   +-- tavg_validation_summary.json
+  |   +-- rouse_compliance_heatmap.png       -- 2D PASS/FAIL/MARGINAL map
+  |   +-- phi_0.001/
+  |   |   +-- N25/
+  |   |   |     fig1_static.tsv             -- chain/run, R2, Rg2
+  |   |   |     fig2_seg_msd.tsv            -- sweep, g1
+  |   |   |     fig3_cm_diffusion.tsv       -- sweep, g_CM
+  |   |   |     fig4_autocorr.tsv           -- sweep, gR
+  |   |   |     static_vs_sweep.tsv         -- sweep, phase, R2, Rg2, ratio
+  |   |   +-- N50/  N100/  N250/  N500/    (same 5 files each)
+  |   +-- phi_0.01/  phi_0.05/  phi_0.10/  phi_0.20/  phi_0.30/  (same)
+  |
+  +-- 06_python_scripts/
+        (all scripts, each with docstring, none containing temperature)
 
 
 SUCCESS CRITERIA
 ================
 
-  The validation campaign is declared SUCCESSFUL if and only if ALL of the
-  following criteria are met. Partial success is not accepted.
+The task is complete ONLY when ALL of the following are simultaneously true:
 
-  SC-01  requirements_list.md exists and shows [DONE] for REQ-00 through REQ-57.
+  SC-1:  Every item in requirements_list.md is marked [x] COMPLETE.
 
-  SC-02  All 15 required PNG figures exist on disk and are non-empty.
+  SC-2:  Every file in DELIVERABLES exists on disk. All 30 state point
+         data directories are non-empty.
 
-  SC-03  All 25 TSV data files exist on disk (5 types x 5 chain lengths).
+  SC-3:  At phi = 0.001 (dilute baseline, matching Kuriata conditions):
+           2nu for R2  within [1.15, 1.25], R^2 >= 0.99
+           2nu for Rg2 within [1.15, 1.25], R^2 >= 0.99
 
-  SC-04  tavg_validation_summary.json exists and contains:
-           - measured exponents for all 7 dynamic/static scaling laws
-           - pass/fail verdict for each exponent vs theory
-           - MET/NOT MET verdict for all 17 Rouse 1953 properties (sections
-             1.1-1.5 and 2.1-2.12), each with a written justification
+  SC-4:  At phi = 0.001: D exponent within [-1.05, -0.95], R^2 >= 0.99.
 
-  SC-05  Measured exponents are within the following tolerance bands:
-           R2_exponent:   1.18 +/- 0.10
-           Rg2_exponent:  1.18 +/- 0.10
-           D_exponent:   -1.00 +/- 0.10
-           tau_R_exponent: 2.18 +/- 0.20
-           g_CM_exponent:  1.00 +/- 0.10
-           g1_exponent:    0.50 +/- 0.15
-         If an exponent falls outside its band, it is logged as FAIL in the
-         JSON and explained in README.md. The campaign does not halt for a
-         single FAIL, but FAIL items must be documented, not concealed.
+  SC-5:  At phi = 0.001: tau_R exponent within [2.0, 2.4], R^2 >= 0.99.
 
-  SC-06  No unauthorized files exist anywhere in the project directory tree.
-         (Only requirements_list.md, iteration_log.txt, and the 57 deliverable
-         files listed above are permitted.)
+  SC-6:  At phi = 0.001: g1(t) shows two-regime behavior with short-time
+         exponent in [0.50, 0.70] and long-time exponent in [0.95, 1.05].
 
-  SC-07  README.md contains a summary table matching the format:
-           Property         Theory   Measured   Pass/Fail
-           -----------------------------------------------
-           R2 exponent      1.18     X.XX       PASS/FAIL
-           Rg2 exponent     1.18     X.XX       PASS/FAIL
-           R2/Rg2 ratio     6.25     X.XX       PASS/FAIL
-           D exponent      -1.00     X.XX       PASS/FAIL
-           tau_R exponent   2.18     X.XX       PASS/FAIL
-           g_CM exponent    1.00     X.XX       PASS/FAIL
-           g1 exponent      0.50     X.XX       PASS/FAIL
+  SC-7:  At phi = 0.001: g_CM exponent within [0.95, 1.05] for all N.
 
-  SC-08  README.md contains an explicit list of ALL 17 Rouse 1953 properties
-         (static 1.1-1.5, dynamic 2.1-2.12) with MET or NOT MET and reason.
+  SC-8:  Every chain length at every phi level equilibrates in <= 10000
+         MC sweeps, verified by plateau in R2 and Rg2 plots.
 
-  SC-09  iteration_log.txt contains, for each iteration:
-           - PROMISE entries from all workers
-           - DONE or FAIL entries for every promise
-           - REPORT entry from Supervisor
-           - ASSESSMENT entry from Manager
-           - SENTINEL violation summary (or "no violations")
-           - COMPLETE or CONTINUE decision from Timekeeper
+  SC-9:  phi* is identified and documented for every Rouse property --
+         the critical density above which that property fails the
+         pass/fail threshold.
 
-  SC-10  All Python scripts in 06_python_scripts\ are syntactically valid Python
-         and contain no placeholder comments such as "# TODO" or "# insert code here".
+  SC-10: The compliance heatmap (rouse_compliance_heatmap.png) covers all
+         Rouse properties x all 6 phi levels with PASS/FAIL/MARGINAL cells.
+
+  SC-11: Every plot has title, axis labels with units, legend, and where
+         applicable fitted exponent and R^2 annotated. Kuriata 2016 target
+         values shown as reference lines.
+
+  SC-12: tavg_validation_summary.json contains PASS/FAIL verdict and
+         measured exponent for every Rouse property at every phi level,
+         plus phi* for each property.
+
+  SC-13: No Sentinel violation remains unresolved. No temperature parameter
+         exists in any script or config file.
+
+  SC-14: Only two working files at project root: requirements_list.md and
+         iteration_log.txt. No other temporary files anywhere.
+
+  SC-15: README.md states:
+           (a) Which Rouse properties from [REF-2] are MET by SURPASS-alpha
+               and at which phi range they hold
+           (b) Which Rouse properties from [REF-2] are NOT met and at what
+               phi they break down
+           (c) How SURPASS-alpha compares to both models in [REF-1] at
+               the dilute baseline (phi = 0.001)
+           (d) The physical interpretation of each phi* -- what increasing
+               density does to each Rouse property and why
+           (e) Confirmation that excluded volume is effectively infinite
+               (E -> inf), making temperature irrelevant, consistent with
+               Dr. Dominik Gront's clarification of 30 Mar 2026
+           (f) Confirmation that l0/d0 = 1.5 was chosen by Mohammad Nazmul
+               Saqib and its location on Kuriata Fig. 3 is documented
 
 ================================================================================
-END OF PROMPT
+END OF PROMPT v3.0
 ================================================================================

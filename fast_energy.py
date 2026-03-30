@@ -52,8 +52,38 @@ def _count_overlaps(moved_pos, nbr_pos, box, inv_box, r_rep_sq):
 
 
 @njit(cache=True)
+def _three_zone_energy(moved_pos, nbr_pos, box, inv_box,
+                       r_rep_sq, r_max_sq, rep_e, contact_e):
+    """Compute 3-zone energy: repulsive (r<r_rep) + contact (r_rep<=r<r_max).
+
+    Returns:
+        float total energy contribution
+    """
+    M = moved_pos.shape[0]
+    K = nbr_pos.shape[0]
+    energy = 0.0
+    for i in range(M):
+        mx = moved_pos[i, 0]
+        my = moved_pos[i, 1]
+        mz = moved_pos[i, 2]
+        for j in range(K):
+            dx = nbr_pos[j, 0] - mx
+            dy = nbr_pos[j, 1] - my
+            dz = nbr_pos[j, 2] - mz
+            dx -= box * round(dx * inv_box)
+            dy -= box * round(dy * inv_box)
+            dz -= box * round(dz * inv_box)
+            r2 = dx * dx + dy * dy + dz * dz
+            if r2 < r_rep_sq:
+                energy += rep_e
+            elif r2 < r_max_sq:
+                energy += contact_e
+    return energy
+
+
+@njit(cache=True)
 def _delta_energy_fast(old_pos, new_pos, nbr_pos, box, inv_box, r_rep_sq, rep_e):
-    """Compute delta-E for a single move proposal using numba.
+    """Compute delta-E for a single move proposal using numba (repulsive only).
 
     Skips intra-segment energy (rigid-body moves preserve it).
 
@@ -63,6 +93,17 @@ def _delta_energy_fast(old_pos, new_pos, nbr_pos, box, inv_box, r_rep_sq, rep_e)
     e_old = _count_overlaps(old_pos, nbr_pos, box, inv_box, r_rep_sq)
     e_new = _count_overlaps(new_pos, nbr_pos, box, inv_box, r_rep_sq)
     return (e_new - e_old) * rep_e
+
+
+@njit(cache=True)
+def _delta_energy_3zone(old_pos, new_pos, nbr_pos, box, inv_box,
+                        r_rep_sq, r_max_sq, rep_e, contact_e):
+    """Compute delta-E using 3-zone kernel (repulsive + contact)."""
+    e_old = _three_zone_energy(old_pos, nbr_pos, box, inv_box,
+                               r_rep_sq, r_max_sq, rep_e, contact_e)
+    e_new = _three_zone_energy(new_pos, nbr_pos, box, inv_box,
+                               r_rep_sq, r_max_sq, rep_e, contact_e)
+    return e_new - e_old
 
 
 @njit(cache=True)
@@ -143,7 +184,8 @@ def _delta_energy_direct(old_pos, new_pos, all_pos, nc, inv_cs, half_box,
                           box, inv_box, r_rep_sq, rep_e):
     """
     Combined gather + overlap counting in a single JIT'd function.
-    Eliminates the intermediate neighbor array allocation.
+    Uses visited-cell list instead of full bitmap scan for O(K) instead
+    of O(nc³) iteration — critical for large boxes with many empty cells.
     """
     nc_m1 = nc - 1
     M_old = old_pos.shape[0]
@@ -152,8 +194,10 @@ def _delta_energy_direct(old_pos, new_pos, all_pos, nc, inv_cs, half_box,
     gs = global_exclude_start
     ge = global_exclude_end
 
-    # Bitmap for visited neighbor cells
+    # Bitmap + visited-cell list: O(K) iteration instead of O(nc³) scan
     visited = np.zeros(nc3, dtype=np.bool_)
+    visited_list = np.empty((M_old + M_new) * 27, dtype=np.int64)
+    n_visited = 0
 
     for k in range(M_old):
         cx = max(0, min(nc_m1, int((old_pos[k, 0] + half_box) * inv_cs)))
@@ -161,21 +205,28 @@ def _delta_energy_direct(old_pos, new_pos, all_pos, nc, inv_cs, half_box,
         cz = max(0, min(nc_m1, int((old_pos[k, 2] + half_box) * inv_cs)))
         cell = (cx * nc + cy) * nc + cz
         for ni in range(27):
-            visited[neighbor_offsets[cell, ni]] = True
+            c = neighbor_offsets[cell, ni]
+            if not visited[c]:
+                visited[c] = True
+                visited_list[n_visited] = c
+                n_visited += 1
     for k in range(M_new):
         cx = max(0, min(nc_m1, int((new_pos[k, 0] + half_box) * inv_cs)))
         cy = max(0, min(nc_m1, int((new_pos[k, 1] + half_box) * inv_cs)))
         cz = max(0, min(nc_m1, int((new_pos[k, 2] + half_box) * inv_cs)))
         cell = (cx * nc + cy) * nc + cz
         for ni in range(27):
-            visited[neighbor_offsets[cell, ni]] = True
+            c = neighbor_offsets[cell, ni]
+            if not visited[c]:
+                visited[c] = True
+                visited_list[n_visited] = c
+                n_visited += 1
 
-    # Count overlaps directly (no intermediate array)
+    # Count overlaps — iterate only visited cells
     e_old = 0
     e_new = 0
-    for c in range(nc3):
-        if not visited[c]:
-            continue
+    for vi in range(n_visited):
+        c = visited_list[vi]
         cnt = cell_counts[c]
         if cnt == 0:
             continue
@@ -209,6 +260,197 @@ def _delta_energy_direct(old_pos, new_pos, all_pos, nc, inv_cs, half_box,
                     e_new += 1
 
     return (e_new - e_old) * rep_e
+
+
+@njit(parallel=True, cache=True)
+def _batch_delta_energy_direct(
+        n_proposals,
+        old_pos_flat, new_pos_flat, n_moved_arr,
+        all_pos, global_starts, global_ends,
+        nc, inv_cs, half_box,
+        neighbor_offsets, sorted_order, cell_starts, cell_counts,
+        box, inv_box, r_rep_sq, rep_e,
+        max_moved):
+    """
+    Compute delta-E for B proposals in parallel using numba prange.
+
+    Each proposal is processed independently on a separate thread.
+    All proposals must be from different chains (guaranteed by round-robin).
+
+    Args:
+        n_proposals: number of valid proposals
+        old_pos_flat: [B, max_moved, 3] old positions (padded)
+        new_pos_flat: [B, max_moved, 3] new positions (padded)
+        n_moved_arr: [B] number of moved beads per proposal
+        all_pos: [total_beads, 3] all positions
+        global_starts: [B] global bead index start
+        global_ends: [B] global bead index end
+        nc, inv_cs, half_box: cell-list params
+        neighbor_offsets: [nc3, 27] neighbor cell offsets
+        sorted_order, cell_starts, cell_counts: cell-list data
+        box, inv_box, r_rep_sq, rep_e: energy params
+        max_moved: max beads moved in any proposal
+
+    Returns:
+        [B] array of delta-E values
+    """
+    B = n_proposals
+    nc_m1 = nc - 1
+    nc3 = nc * nc * nc
+    results = np.zeros(B, dtype=np.float64)
+
+    for pi in prange(B):
+        nm = n_moved_arr[pi]
+        if nm == 0:
+            continue
+        gs = global_starts[pi]
+        ge = global_ends[pi]
+
+        old_p = old_pos_flat[pi, :nm, :]
+        new_p = new_pos_flat[pi, :nm, :]
+
+        # Bitmap for visited neighbor cells
+        visited = np.zeros(nc3, dtype=np.bool_)
+        for k in range(nm):
+            cx = max(0, min(nc_m1, int((old_p[k, 0] + half_box) * inv_cs)))
+            cy = max(0, min(nc_m1, int((old_p[k, 1] + half_box) * inv_cs)))
+            cz = max(0, min(nc_m1, int((old_p[k, 2] + half_box) * inv_cs)))
+            cell = (cx * nc + cy) * nc + cz
+            for ni in range(27):
+                visited[neighbor_offsets[cell, ni]] = True
+            cx = max(0, min(nc_m1, int((new_p[k, 0] + half_box) * inv_cs)))
+            cy = max(0, min(nc_m1, int((new_p[k, 1] + half_box) * inv_cs)))
+            cz = max(0, min(nc_m1, int((new_p[k, 2] + half_box) * inv_cs)))
+            cell = (cx * nc + cy) * nc + cz
+            for ni in range(27):
+                visited[neighbor_offsets[cell, ni]] = True
+
+        e_old = 0
+        e_new = 0
+        for c in range(nc3):
+            if not visited[c]:
+                continue
+            cnt = cell_counts[c]
+            if cnt == 0:
+                continue
+            s = cell_starts[c]
+            for i in range(cnt):
+                atom = sorted_order[s + i]
+                if atom >= gs and atom < ge:
+                    continue
+                nx = all_pos[atom, 0]
+                ny = all_pos[atom, 1]
+                nz = all_pos[atom, 2]
+                for m in range(nm):
+                    dx = nx - old_p[m, 0]
+                    dy = ny - old_p[m, 1]
+                    dz = nz - old_p[m, 2]
+                    dx -= box * round(dx * inv_box)
+                    dy -= box * round(dy * inv_box)
+                    dz -= box * round(dz * inv_box)
+                    r2 = dx*dx + dy*dy + dz*dz
+                    if r2 < r_rep_sq:
+                        e_old += 1
+                for m in range(nm):
+                    dx = nx - new_p[m, 0]
+                    dy = ny - new_p[m, 1]
+                    dz = nz - new_p[m, 2]
+                    dx -= box * round(dx * inv_box)
+                    dy -= box * round(dy * inv_box)
+                    dz -= box * round(dz * inv_box)
+                    r2 = dx*dx + dy*dy + dz*dz
+                    if r2 < r_rep_sq:
+                        e_new += 1
+
+        results[pi] = (e_new - e_old) * rep_e
+
+    return results
+
+
+@njit(cache=True)
+def _delta_energy_direct_3zone(old_pos, new_pos, all_pos, nc, inv_cs, half_box,
+                                neighbor_offsets, sorted_order, cell_starts,
+                                cell_counts, global_exclude_start, global_exclude_end,
+                                box, inv_box, r_rep_sq, r_max_sq, rep_e, contact_e):
+    """
+    Combined gather + 3-zone energy in a single JIT'd function.
+    Adds contact zone (r_rep <= r < r_max) energy to the repulsive zone.
+    """
+    nc_m1 = nc - 1
+    M_old = old_pos.shape[0]
+    M_new = new_pos.shape[0]
+    nc3 = nc * nc * nc
+    gs = global_exclude_start
+    ge = global_exclude_end
+
+    visited = np.zeros(nc3, dtype=np.bool_)
+    visited_list = np.empty((M_old + M_new) * 27, dtype=np.int64)
+    n_visited = 0
+
+    for k in range(M_old):
+        cx = max(0, min(nc_m1, int((old_pos[k, 0] + half_box) * inv_cs)))
+        cy = max(0, min(nc_m1, int((old_pos[k, 1] + half_box) * inv_cs)))
+        cz = max(0, min(nc_m1, int((old_pos[k, 2] + half_box) * inv_cs)))
+        cell = (cx * nc + cy) * nc + cz
+        for ni in range(27):
+            c = neighbor_offsets[cell, ni]
+            if not visited[c]:
+                visited[c] = True
+                visited_list[n_visited] = c
+                n_visited += 1
+    for k in range(M_new):
+        cx = max(0, min(nc_m1, int((new_pos[k, 0] + half_box) * inv_cs)))
+        cy = max(0, min(nc_m1, int((new_pos[k, 1] + half_box) * inv_cs)))
+        cz = max(0, min(nc_m1, int((new_pos[k, 2] + half_box) * inv_cs)))
+        cell = (cx * nc + cy) * nc + cz
+        for ni in range(27):
+            c = neighbor_offsets[cell, ni]
+            if not visited[c]:
+                visited[c] = True
+                visited_list[n_visited] = c
+                n_visited += 1
+
+    e_old = 0.0
+    e_new = 0.0
+    for vi in range(n_visited):
+        c = visited_list[vi]
+        cnt = cell_counts[c]
+        if cnt == 0:
+            continue
+        s = cell_starts[c]
+        for i in range(cnt):
+            atom = sorted_order[s + i]
+            if atom >= gs and atom < ge:
+                continue
+            nx = all_pos[atom, 0]
+            ny = all_pos[atom, 1]
+            nz = all_pos[atom, 2]
+            for m in range(M_old):
+                dx = nx - old_pos[m, 0]
+                dy = ny - old_pos[m, 1]
+                dz = nz - old_pos[m, 2]
+                dx -= box * round(dx * inv_box)
+                dy -= box * round(dy * inv_box)
+                dz -= box * round(dz * inv_box)
+                r2 = dx*dx + dy*dy + dz*dz
+                if r2 < r_rep_sq:
+                    e_old += rep_e
+                elif r2 < r_max_sq:
+                    e_old += contact_e
+            for m in range(M_new):
+                dx = nx - new_pos[m, 0]
+                dy = ny - new_pos[m, 1]
+                dz = nz - new_pos[m, 2]
+                dx -= box * round(dx * inv_box)
+                dy -= box * round(dy * inv_box)
+                dz -= box * round(dz * inv_box)
+                r2 = dx*dx + dy*dy + dz*dz
+                if r2 < r_rep_sq:
+                    e_new += rep_e
+                elif r2 < r_max_sq:
+                    e_new += contact_e
+
+    return e_new - e_old
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +546,7 @@ class FastEnergyComputer:
         self.r_rep_sq = cfg.r_rep_sq
         self.r_max_sq = cfg.r_max_sq
         self.rep_e = cfg.repulsive_energy
+        self.contact_e = cfg.contact_energy
         self.kBT = cfg.kBT
 
         self.cell_list = FastCellList(cfg.box_size, cfg.r_max)
@@ -335,6 +578,7 @@ class FastEnergyComputer:
                               old_pos_np, new_pos_np, N):
         """
         Compute ΔE for a proposed move. Uses combined gather+overlap JIT kernel.
+        Automatically selects 3-zone kernel when contact_energy != 0.
 
         Args:
             chain_idx: int
@@ -351,6 +595,15 @@ class FastEnergyComputer:
         global_end = global_start + n_moved
         cl = self.cell_list
 
+        if self.contact_e != 0.0:
+            return _delta_energy_direct_3zone(
+                old_pos_np, new_pos_np, self._pos_np,
+                cl._nc, cl._inv_cs, cl.half_box,
+                cl._neighbor_offsets, cl._sorted_order,
+                cl._cell_starts, cl._cell_counts,
+                global_start, global_end,
+                self.box, self.inv_box, self.r_rep_sq, self.r_max_sq,
+                self.rep_e, self.contact_e)
         return _delta_energy_direct(
             old_pos_np, new_pos_np, self._pos_np,
             cl._nc, cl._inv_cs, cl.half_box,
@@ -358,6 +611,46 @@ class FastEnergyComputer:
             cl._cell_starts, cl._cell_counts,
             global_start, global_end,
             self.box, self.inv_box, self.r_rep_sq, self.rep_e)
+
+    def compute_batch_delta_energy(self, proposals, N, max_moved):
+        """
+        Compute delta-E for a batch of proposals in parallel using numba prange.
+
+        Args:
+            proposals: list of FastProposal objects
+            N: beads per chain
+            max_moved: max n_moved across proposals
+
+        Returns:
+            list of float delta-E values
+        """
+        B = len(proposals)
+        old_flat = np.zeros((B, max_moved, 3), dtype=np.float64)
+        new_flat = np.zeros((B, max_moved, 3), dtype=np.float64)
+        nm_arr = np.zeros(B, dtype=np.int64)
+        gs_arr = np.zeros(B, dtype=np.int64)
+        ge_arr = np.zeros(B, dtype=np.int64)
+
+        for i, p in enumerate(proposals):
+            nm = p.n_moved
+            if nm > 0:
+                old_flat[i, :nm, :] = p.old_pos
+                new_flat[i, :nm, :] = p.new_pos
+                nm_arr[i] = nm
+                gs_arr[i] = p.chain_idx * N + p.bead_start
+                ge_arr[i] = gs_arr[i] + nm
+
+        cl = self.cell_list
+        results = _batch_delta_energy_direct(
+            B, old_flat, new_flat, nm_arr,
+            self._pos_np, gs_arr, ge_arr,
+            cl._nc, cl._inv_cs, cl.half_box,
+            cl._neighbor_offsets, cl._sorted_order,
+            cl._cell_starts, cl._cell_counts,
+            self.box, self.inv_box, self.r_rep_sq, self.rep_e,
+            max_moved)
+
+        return results.tolist()
 
     def compute_segment_pair_energy(self, pos_a_np, pos_b_np):
         """Compute pairwise energy between two groups of beads (for rank-1)."""
