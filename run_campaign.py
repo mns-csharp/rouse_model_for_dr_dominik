@@ -38,7 +38,7 @@ from rouse_model_python.io_utils import (
 
 # Deliverable output directory
 DELIVERABLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "rouse_python_validation_deliverable_2016_MAR_26")
+                               "rouse_python_validation_deliverable_v2")
 
 
 def set_all_seeds(seed: int = SEED):

@@ -1,0 +1,72 @@
+Rouse Codebase Verification Checklist
+Core Simulation Features
+(1) You used NumberSpace for PBC/MIC in both batched and non-batched mode
+(2) You used segmented multistep MC algorithm only
+(3) You used matrix based energy calculation inside the segmented multistep MC algorithm
+(4) You used C-terminal tail move, N-terminal tail move, and pivot moves
+(5) You used excluded volume kernel
+(6) You used CA contact energy
+(7) You used GPU acceleration
+(8) You used batch processing
+(9) You used multistep size and segment size are two different parameters
+(10) Your code scales well when you increase the number of beads to be simulated
+(11) No bond is broken during or after the simulation
+(12) ... ... ...
+Initialization & Setup
+(13) Chain initialization produces valid configurations (serpentine grid and random walk both yield correct bond lengths of l0 = 5.7 A)
+(14) Box size is correctly computed from volume fraction phi = 0.035 for each chain length
+(15) Seed setting (set_all_seeds) ensures reproducibility across numpy, torch, and Python random
+PBC / Geometry
+(16) Chain unwrapping (unwrap_chains via bond vectors + cumsum) gives correct end-to-end distances across periodic boundaries
+(17) Anchor-relative unwrapping (unwrap_chain_from_anchor) is consistent with full sequential unwrapping
+(18) Cell-list grid indices respect PBC (27-neighbor offsets with periodic wrapping)
+Energy
+(19) Three-zone excluded-volume kernel returns correct values in each regime (r < sigma -> 1e6, sigma <= r < 2*sigma -> contact, r >= 2*sigma -> 0)
+(20) Cell-list neighbor gathering produces the same delta-E as brute-force all-pairs computation
+(21) Rank-1 energy correction in multistep MC (E11 - E01 - E10 + E00) matches recomputed full delta-E
+(22) FP32 GPU energy kernels agree with FP64 CPU results within acceptable tolerance
+(23) Cell list is rebuilt between batches so accepted moves are reflected in neighbor lookups
+MC Moves
+(24) Hinge move rotates only the interior segment [seg_start, seg_end) while anchor beads remain fixed
+(25) Rodrigues rotation matrix is orthogonal (R*R^T = I) and preserves bond lengths exactly
+(26) Random SO(3) matrices (Marsaglia method) produce uniform rotational sampling
+(27) Degenerate rotation axes (length < 1e-7) are handled gracefully with fallback to orthogonal axis
+(28) Pivot move selects N-terminal vs C-terminal half with equal probability (50/50)
+Metropolis & Acceptance
+(29) Metropolis criterion handles overflow correctly (exp bounds clamped to [-745, 709])
+(30) Acceptance rates are tracked separately per move type (hinge, N-tail, C-tail, pivot)
+(31) delta-E = 0 moves are always accepted
+Batch / GPU Path
+(32) BatchProposal padding masks correctly exclude padded beads from energy computation
+(33) Self-interaction masking in batched delta-E kernel prevents a bead from interacting with itself
+(34) RandPool pre-generation eliminates per-call GPU-to-CPU sync overhead and refills correctly
+(35) torch.compile-fused kernels produce identical results to the unfused reference
+Fast (CPU/Numba) Path
+(36) Numba JIT (fast_energy.py, fast_sweep.py) produces identical results to the PyTorch path for the same RNG seed
+(37) FastRouseSimulation and RouseSimulation give statistically consistent observables
+(38) _sync_torch_from_numpy() correctly transfers positions when switching between numpy and torch
+Observables & Physics Validation
+(39) R^2 scales as N^(2*nu) with 2*nu ~ 1.18 (self-avoiding walk exponent)
+(40) Rg^2 scales as N^(2*nu) with 2*nu ~ 1.18
+(41) R^2/Rg^2 ratio converges to ~ 6.25 (SAW) for large N
+(42) Center-of-mass MSD (gCM) is diffusive: gCM proportional to t with exponent ~ 1.0
+(43) Middle-segment MSD (g1) shows sub-diffusive scaling g1 proportional to t^0.5 at short times
+(44) End-to-end vector autocorrelation (gR) decays correctly, yielding tau_R proportional to N^2.18
+(45) Diffusion coefficient scales as D proportional to N^(-1)
+Equilibration & Convergence
+(46) R^2 and Rg^2 plateau during equilibration (static_vs_sweep tracking confirms convergence)
+(47) Production-phase observables are sampled only after equilibration is complete
+(48) Dynamic accumulator correctly stores time-lagged reference snapshots at sample_interval
+Segment Handling
+(49) Segment types (N_TERMINAL, C_TERMINAL, INNER, BOTH) are assigned correctly based on chain length and segment size
+(50) Segment shuffling between batches ensures ergodic sampling of all chain regions
+(51) multistep_size (batch size for parallel proposals) and segment_size (residue count per segment) are independently configurable and correctly used
+Output & Reproducibility
+(52) TSV files (static, dynamic, sweep) contain correct headers and data for all chain lengths
+(53) Plots include power-law fits with R^2 goodness-of-fit
+(54) Results are deterministic given the same seed, device, and mode
+Robustness / Edge Cases
+(55) Short chains (N=25) with segment_size=20 produce valid segment decomposition (covers edge case where N ~ segment_size)
+(56) Single-bead segments and full-chain segments are handled without index errors
+(57) Empty proposals (n_moved=0) are handled gracefully in energy computation and acceptance
+(58) Volume fraction remains physically reasonable across all N (no chain overlap at initialization)

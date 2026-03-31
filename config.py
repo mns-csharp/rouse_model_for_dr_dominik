@@ -166,6 +166,9 @@ class SimulationConfig:
         """
         n_chains = compute_n_chains(N, phi)
         box_size = compute_box_size(N, n_chains, phi)
+        # Adaptive sample interval: short chains relax fast, need finer sampling
+        # to resolve tau_R (which is ~N^2.18).
+        si = max(1, min(SAMPLE_INTERVAL, N // 10))
         return cls(
             N=N,
             n_chains=n_chains,
@@ -174,6 +177,7 @@ class SimulationConfig:
             box_size=box_size,
             target_phi=phi,
             device=device,
+            sample_interval=si,
         )
 
     @property

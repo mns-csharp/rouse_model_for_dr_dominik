@@ -83,6 +83,559 @@ INPUTS
           each property test at each density level.
 
 
+EMBEDDED CHECKLIST (from rouse_verification_checklist.docx)
+===========================================================
+
+Rouse Codebase Verification Checklist
+
+Core Simulation Features
+(1) You used NumberSpace for PBC/MIC in both batched and non-batched mode
+(2) You used segmented multistep MC algorithm only
+(3) You used matrix based energy calculation inside the segmented multistep MC algorithm
+(4) You used C-terminal tail move, N-terminal tail move, and pivot moves
+(5) You used excluded volume kernel
+(6) You used CA contact energy
+(7) You used GPU acceleration
+(8) You used batch processing
+(9) You used multistep size and segment size are two different parameters
+(10) Your code scales well when you increase the number of beads to be simulated
+(11) No bond is broken during or after the simulation
+(12) ... ... ...
+
+Initialization & Setup
+(13) Chain initialization produces valid configurations (serpentine grid and random walk both yield correct bond lengths of l0 = 5.7 A)
+(14) Box size is correctly computed from volume fraction phi = 0.035 for each chain length
+(15) Seed setting (set_all_seeds) ensures reproducibility across numpy, torch, and Python random
+
+PBC / Geometry
+(16) Chain unwrapping (unwrap_chains via bond vectors + cumsum) gives correct end-to-end distances across periodic boundaries
+(17) Anchor-relative unwrapping (unwrap_chain_from_anchor) is consistent with full sequential unwrapping
+(18) Cell-list grid indices respect PBC (27-neighbor offsets with periodic wrapping)
+
+Energy
+(19) Three-zone excluded-volume kernel returns correct values in each regime (r < sigma -> 1e6, sigma <= r < 2*sigma -> contact, r >= 2*sigma -> 0)
+(20) Cell-list neighbor gathering produces the same delta-E as brute-force all-pairs computation
+(21) Rank-1 energy correction in multistep MC (E11 - E01 - E10 + E00) matches recomputed full delta-E
+(22) FP32 GPU energy kernels agree with FP64 CPU results within acceptable tolerance
+(23) Cell list is rebuilt between batches so accepted moves are reflected in neighbor lookups
+
+MC Moves
+(24) Hinge move rotates only the interior segment [seg_start, seg_end) while anchor beads remain fixed
+(25) Rodrigues rotation matrix is orthogonal (R*R^T = I) and preserves bond lengths exactly
+(26) Random SO(3) matrices (Marsaglia method) produce uniform rotational sampling
+(27) Degenerate rotation axes (length < 1e-7) are handled gracefully with fallback to orthogonal axis
+(28) Pivot move selects N-terminal vs C-terminal half with equal probability (50/50)
+
+Metropolis & Acceptance
+(29) Metropolis criterion handles overflow correctly (exp bounds clamped to [-745, 709])
+(30) Acceptance rates are tracked separately per move type (hinge, N-tail, C-tail, pivot)
+(31) delta-E = 0 moves are always accepted
+
+Batch / GPU Path
+(32) BatchProposal padding masks correctly exclude padded beads from energy computation
+(33) Self-interaction masking in batched delta-E kernel prevents a bead from interacting with itself
+(34) RandPool pre-generation eliminates per-call GPU-to-CPU sync overhead and refills correctly
+(35) torch.compile-fused kernels produce identical results to the unfused reference
+
+Fast (CPU/Numba) Path
+(36) Numba JIT (fast_energy.py, fast_sweep.py) produces identical results to the PyTorch path for the same RNG seed
+(37) FastRouseSimulation and RouseSimulation give statistically consistent observables
+(38) _sync_torch_from_numpy() correctly transfers positions when switching between numpy and torch
+
+Observables & Physics Validation
+(39) R^2 scales as N^(2*nu) with 2*nu ~ 1.18 (self-avoiding walk exponent)
+(40) Rg^2 scales as N^(2*nu) with 2*nu ~ 1.18
+(41) R^2/Rg^2 ratio converges to ~ 6.25 (SAW) for large N
+(42) Center-of-mass MSD (gCM) is diffusive: gCM proportional to t with exponent ~ 1.0
+(43) Middle-segment MSD (g1) shows sub-diffusive scaling g1 proportional to t^0.5 at short times
+(44) End-to-end vector autocorrelation (gR) decays correctly, yielding tau_R proportional to N^2.18
+(45) Diffusion coefficient scales as D proportional to N^(-1)
+
+Equilibration & Convergence
+(46) R^2 and Rg^2 plateau during equilibration (static_vs_sweep tracking confirms convergence)
+(47) Production-phase observables are sampled only after equilibration is complete
+(48) Dynamic accumulator correctly stores time-lagged reference snapshots at sample_interval
+
+Segment Handling
+(49) Segment types (N_TERMINAL, C_TERMINAL, INNER, BOTH) are assigned correctly based on chain length and segment size
+(50) Segment shuffling between batches ensures ergodic sampling of all chain regions
+(51) multistep_size (batch size for parallel proposals) and segment_size (residue count per segment) are independently configurable and correctly used
+
+Output & Reproducibility
+(52) TSV files (static, dynamic, sweep) contain correct headers and data for all chain lengths
+(53) Plots include power-law fits with R^2 goodness-of-fit
+(54) Results are deterministic given the same seed, device, and mode
+
+Robustness / Edge Cases
+(55) Short chains (N=25) with segment_size=20 produce valid segment decomposition (covers edge case where N ~ segment_size)
+(56) Single-bead segments and full-chain segments are handled without index errors
+(57) Empty proposals (n_moved=0) are handled gracefully in energy computation and acceptance
+(58) Volume fraction remains physically reasonable across all N (no chain overlap at initialization)
+
+
+EVIDENCE GATES (MANDATORY -- ONE PER CHECKLIST ITEM)
+=====================================================
+
+PURPOSE: Every checklist item (1)-(58) requires a specific, verifiable proof
+artifact before it may be marked COMPLETE. No item may be closed by:
+  - Prose assertion alone ("this works correctly", "verified", "confirmed")
+  - Claiming the code "obviously" does X without demonstrating it
+  - Referencing code structure without showing runtime output
+  - Saying "tested manually" without logged output
+  - Deferring to another item ("covered by item N")
+  - Marking COMPLETE with a TODO, FIXME, or "will verify later"
+
+GENERAL GATE RULES (apply to ALL 58 items):
+  G1: Every COMPLETE mark MUST cite a proof artifact: a file path, a logged
+      numeric result, a diff, or a test output block. "I read the code and
+      it looks right" is NOT a proof artifact.
+  G2: If the proof is a numeric value, the value MUST appear in a file on
+      disk (TSV, JSON, or log). In-conversation assertions do not count.
+  G3: If the proof is a code-path verification, the agent MUST show EITHER:
+      (a) a unit test that passes with logged output, OR
+      (b) a runtime trace/print showing the code path was actually executed
+          with specific input values and the expected output was produced.
+  G4: If the proof requires comparison (A matches B, X equals Y), BOTH
+      values MUST be printed side by side with their difference/ratio.
+  G5: No item may be marked COMPLETE in the same message that first
+      discovers it. The agent must: (a) investigate, (b) produce evidence,
+      (c) log evidence to disk, (d) THEN mark complete in a subsequent step.
+  G6: The Sentinel agent MUST audit every COMPLETE mark by verifying the
+      cited proof artifact exists on disk and contains the claimed values.
+      Any COMPLETE mark that fails this audit reverts to PENDING.
+
+ITEM-SPECIFIC GATES:
+
+--- Core Simulation Features (1)-(12) ---
+
+GATE-01 [NumberSpace PBC/MIC]:
+  REQUIRED: Run a test where a bead is placed near a box boundary. Apply a
+  displacement that crosses the boundary. Print wrapped coordinates AND
+  minimum-image distance. Do this for BOTH batched and non-batched code
+  paths. Log both outputs to disk. Show that wrapped coords lie within
+  [0, L_box) and MIC distance < L_box/2.
+
+GATE-02 [Segmented multistep MC only]:
+  REQUIRED: Grep the entire codebase for any MC sweep function. Show that
+  EVERY sweep function uses the segmented multistep algorithm. Print the
+  function signatures and their call sites. If any non-segmented MC path
+  exists, document why it is dead code or remove it.
+
+GATE-03 [Matrix-based energy in multistep MC]:
+  REQUIRED: Insert a diagnostic print inside the energy calculation of the
+  segmented multistep MC loop. Run 10 sweeps. Show the printed output
+  confirming matrix-based energy evaluation was called (not scalar loops).
+  Log the shape of the energy matrix for at least one step.
+
+GATE-04 [C-tail, N-tail, pivot moves]:
+  REQUIRED: Run 1000 MC steps. Count how many times each move type
+  (C-terminal tail, N-terminal tail, pivot) was proposed. Print the counts.
+  All three must be > 0. Log to disk.
+
+GATE-05 [Excluded volume kernel]:
+  REQUIRED: Call the excluded volume kernel with three test distances:
+    r = 2.0 A (r < sigma=3.8)  -> must return 1e6
+    r = 5.0 A (sigma <= r < 2*sigma) -> must return contact value
+    r = 8.0 A (r >= 2*sigma)   -> must return 0
+  Print all three inputs and outputs. Log to disk.
+
+GATE-06 [CA contact energy]:
+  REQUIRED: Show the contact energy value used in the code (must be 0 for
+  this athermal system). Grep for ContactEnergy or equivalent. Print the
+  value from config. Verify it equals 0. If nonzero, this is a FAIL.
+
+GATE-07 [GPU acceleration]:
+  REQUIRED: Run the same 100-sweep simulation on CPU and GPU (if GPU
+  available). Print device used for each run. Show that both produce
+  identical final R2 within tolerance. If no GPU is available, document
+  that the code path EXISTS by showing the device-selection branch and
+  tensor .to(device) calls with file:line references.
+
+GATE-08 [Batch processing]:
+  REQUIRED: Run a simulation with batch_size > 1. Print the batch size
+  and the number of proposals per batch for at least one sweep. Show
+  that multiple proposals were evaluated in parallel. Log to disk.
+
+GATE-09 [Multistep size != segment size]:
+  REQUIRED: Print the configured multistep_size and segment_size from a
+  running simulation. Show they are two different parameters with
+  potentially different values. Show where each is used in the code
+  (file:line for each).
+
+GATE-10 [Scaling with number of beads]:
+  REQUIRED: Time (wall-clock) a fixed number of sweeps (e.g., 100) for
+  N=25, N=50, N=100. Print N and elapsed time for each. Show that time
+  does NOT scale worse than O(N^2). Log the table to disk.
+
+GATE-11 [No broken bonds]:
+  REQUIRED: After a production run, compute ALL bond lengths across ALL
+  chains. Print min, max, mean, std of bond lengths. Assert that ALL
+  bond lengths are within [l0 - tolerance, l0 + tolerance] where
+  l0 = 5.7 A and tolerance is documented. If ANY bond is outside
+  tolerance, this is a FAIL. Log the statistics to disk.
+
+GATE-12 [Placeholder item]:
+  REQUIRED: This item is marked "... ... ..." in the checklist. The agent
+  MUST explicitly acknowledge this is a placeholder. It may be marked
+  N/A ONLY with the documented justification: "Item 12 is a placeholder
+  row in the original checklist with no testable content."
+
+--- Initialization & Setup (13)-(15) ---
+
+GATE-13 [Valid chain initialization]:
+  REQUIRED: Initialize chains using BOTH serpentine grid AND random walk
+  methods. For each method, compute ALL bond lengths of the initialized
+  chains. Print min, max, mean for each method. Assert all bonds are
+  within tolerance of l0 = 5.7 A. Log to disk.
+
+GATE-14 [Box size from phi]:
+  REQUIRED: For at least 3 different (N, phi) pairs, compute L_box using
+  the formula L_box = sigma * (N_chains * N / phi)^(1/3). Print N, phi,
+  N_chains, computed L_box, and back-computed phi from L_box. Show that
+  the round-trip phi matches the input phi to within 1%. Log to disk.
+
+GATE-15 [Seed reproducibility]:
+  REQUIRED: Run the SAME simulation twice with the SAME seed. Print the
+  final bead positions (or a hash of them) from both runs. Assert they
+  are bitwise identical. Then run with a DIFFERENT seed. Assert the
+  results differ. Log both comparisons to disk.
+
+--- PBC / Geometry (16)-(18) ---
+
+GATE-16 [Chain unwrapping correctness]:
+  REQUIRED: Create a chain that wraps across a periodic boundary. Compute
+  end-to-end distance using: (a) unwrapped coordinates, (b) direct
+  minimum-image distance. Print both values. Assert they agree within
+  floating-point tolerance. Show at least one case where the chain
+  crosses a boundary (i.e., unwrapped coords go outside [0, L_box)).
+  Log to disk.
+
+GATE-17 [Anchor-relative vs sequential unwrapping]:
+  REQUIRED: For a chain that crosses periodic boundaries, compute
+  unwrapped coordinates using BOTH methods: (a) unwrap_chains (bond
+  vectors + cumsum), (b) unwrap_chain_from_anchor. Print the unwrapped
+  coordinates from both methods for at least the first and last 3 beads.
+  Assert max absolute difference < 1e-6. Log to disk.
+
+GATE-18 [Cell-list PBC]:
+  REQUIRED: Place a bead at position (L_box - 0.1, L_box - 0.1, L_box - 0.1).
+  Place another bead at position (0.1, 0.1, 0.1). These are PBC neighbors.
+  Run the cell-list neighbor lookup. Assert that the second bead appears
+  in the neighbor list of the first. Print both positions and the neighbor
+  list. Log to disk.
+
+--- Energy (19)-(23) ---
+
+GATE-19 [Three-zone excluded volume]:
+  REQUIRED: (Same as GATE-05 but must also verify the zone boundaries.)
+  Test at r = sigma - epsilon, r = sigma, r = sigma + epsilon,
+  r = 2*sigma - epsilon, r = 2*sigma, r = 2*sigma + epsilon.
+  Print all 6 test values and their returned energies. Verify each
+  falls in the correct zone. Log to disk.
+
+GATE-20 [Cell-list vs brute-force delta-E]:
+  REQUIRED: For a proposed MC move, compute delta-E using BOTH the
+  cell-list method AND brute-force all-pairs. Print both values.
+  Assert |cell_list - brute_force| < tolerance (state the tolerance).
+  Do this for at least 3 different moves. Log to disk.
+
+GATE-21 [Rank-1 energy correction]:
+  REQUIRED: For a multistep MC move, compute:
+    (a) E11 - E01 - E10 + E00 (the rank-1 correction)
+    (b) Full recomputed delta-E from scratch
+  Print both values. Assert they agree within tolerance. Do this for
+  at least 3 different multistep proposals. Log to disk.
+
+GATE-22 [FP32 vs FP64 agreement]:
+  REQUIRED: Compute total energy of the SAME configuration using:
+    (a) FP32 on GPU (or FP32 on CPU if no GPU)
+    (b) FP64 on CPU
+  Print both values and their relative difference. Assert relative
+  difference < stated tolerance (must define what "acceptable" means
+  numerically). Log to disk.
+
+GATE-23 [Cell-list rebuild between batches]:
+  REQUIRED: Run 2 batches. After batch 1, print the cell-list hash or
+  a diagnostic showing it was rebuilt. Show that an accepted move in
+  batch 1 is reflected in the cell-list used by batch 2. Concretely:
+  move a bead from cell A to cell B in batch 1, then show that batch 2's
+  cell-list has the bead in cell B, not cell A. Log to disk.
+
+--- MC Moves (24)-(28) ---
+
+GATE-24 [Hinge move segment isolation]:
+  REQUIRED: Record positions of ALL beads before a hinge move. Apply the
+  hinge move to segment [seg_start, seg_end). Record positions after.
+  Assert: (a) beads OUTSIDE [seg_start, seg_end) have ZERO displacement,
+  (b) at least one bead INSIDE the segment has nonzero displacement.
+  Print the displacement magnitudes for anchor beads and moved beads.
+  Log to disk.
+
+GATE-25 [Rodrigues orthogonality and bond preservation]:
+  REQUIRED: Generate a Rodrigues rotation matrix R. Compute R @ R^T.
+  Print the result. Assert max|R @ R^T - I| < 1e-10. Then apply R to
+  a segment. Compute bond lengths before and after. Print max absolute
+  change in bond length. Assert < 1e-10. Log to disk.
+
+GATE-26 [Uniform SO(3) sampling]:
+  REQUIRED: Generate 10000 random rotation matrices using Marsaglia.
+  Extract the rotation angle from each. Plot or print a histogram of
+  rotation angles. The distribution should follow p(theta) proportional
+  to (1 - cos(theta)) for theta in [0, pi]. Print the KS-test p-value
+  against this distribution. Assert p-value > 0.01. Log to disk.
+
+GATE-27 [Degenerate axis fallback]:
+  REQUIRED: Construct a rotation axis with length < 1e-7 (e.g., nearly
+  zero vector). Call the rotation function. Assert it does NOT crash,
+  does NOT produce NaN, and returns a valid rotation matrix (orthogonal,
+  det = +1). Print the degenerate axis, the fallback axis used, and
+  the resulting matrix. Log to disk.
+
+GATE-28 [Pivot move 50/50 selection]:
+  REQUIRED: Run 10000 pivot moves. Count how many selected N-terminal
+  vs C-terminal. Print both counts. Assert each is within [4500, 5500]
+  (binomial 99% CI for p=0.5, n=10000). Log to disk.
+
+--- Metropolis & Acceptance (29)-(31) ---
+
+GATE-29 [Overflow handling]:
+  REQUIRED: Call the Metropolis function with delta_E = +1000 (should
+  trigger overflow in exp(-beta*dE)). Assert it does NOT raise an
+  exception, does NOT produce inf/nan, and correctly rejects. Then
+  call with delta_E = -1000. Assert it accepts. Print both results.
+  Log to disk.
+
+GATE-30 [Per-move-type acceptance tracking]:
+  REQUIRED: Run 1000 sweeps. Print the acceptance rate for EACH move
+  type separately: hinge, N-tail, C-tail, pivot. All four rates must
+  be printed as distinct values (not a single aggregate). Log to disk.
+
+GATE-31 [delta-E = 0 always accepted]:
+  REQUIRED: Call the Metropolis function with delta_E = 0 exactly.
+  Repeat 100 times. Assert ALL 100 calls return "accept". Print the
+  acceptance count (must be 100/100). Log to disk.
+
+--- Batch / GPU Path (32)-(35) ---
+
+GATE-32 [Padding mask excludes padded beads]:
+  REQUIRED: Create a BatchProposal where at least one proposal is
+  shorter than the padded length. Compute energy. Show that the padded
+  positions contribute zero to delta-E. Print the mask, the padded
+  bead energies (should be 0), and the real bead energies. Log to disk.
+
+GATE-33 [Self-interaction masking]:
+  REQUIRED: In the batched delta-E kernel, verify that bead i does not
+  interact with itself. Print the interaction list for one bead. Assert
+  bead i is NOT in its own neighbor list. Do this for at least 3 beads.
+  Log to disk.
+
+GATE-34 [RandPool pre-generation]:
+  REQUIRED: Create a RandPool. Draw random numbers until the pool is
+  nearly exhausted. Draw one more to trigger a refill. Print pool size
+  before and after refill. Assert the pool refilled without error and
+  without a GPU-to-CPU sync (show absence of torch.cuda.synchronize
+  in the hot path, or show timing evidence). Log to disk.
+
+GATE-35 [torch.compile fusion correctness]:
+  REQUIRED: Run the SAME energy computation with and without
+  torch.compile. Print both results. Assert max absolute difference
+  < 1e-6. If torch.compile is not available in this environment,
+  document the version check and mark as ENV_SKIP with justification.
+  Log to disk.
+
+--- Fast (CPU/Numba) Path (36)-(38) ---
+
+GATE-36 [Numba vs PyTorch agreement]:
+  REQUIRED: Run 100 sweeps with the SAME seed using: (a) Numba/fast path,
+  (b) PyTorch path. Print final R2 from both. Assert |R2_numba - R2_torch|
+  / R2_torch < 0.01 (1% relative tolerance). Log to disk.
+
+GATE-37 [FastRouseSimulation vs RouseSimulation]:
+  REQUIRED: Run both simulation classes for the same N, phi, seed, and
+  sweep count. Compute R2, Rg2, and D from each. Print all six values
+  (3 per class). Assert each pair agrees within 5% or state the
+  statistical tolerance used. Log to disk.
+
+GATE-38 [_sync_torch_from_numpy]:
+  REQUIRED: Set bead positions in the numpy array. Call
+  _sync_torch_from_numpy(). Read back from the torch tensor. Assert
+  max|numpy_pos - torch_pos| < 1e-12. Print at least 3 bead positions
+  from both arrays side by side. Log to disk.
+
+--- Observables & Physics Validation (39)-(45) ---
+
+GATE-39 [R^2 scaling]:
+  REQUIRED: From production data at phi=0.001, fit log(R2) vs log(N).
+  Print: N values, R2 values, fitted exponent 2*nu, R^2 of fit, and
+  residuals. Assert 2*nu in [1.10, 1.30]. The fit MUST use data from
+  actual simulation runs, NOT hard-coded values. Log to TSV on disk.
+
+GATE-40 [Rg^2 scaling]:
+  REQUIRED: Same as GATE-39 but for Rg2. Print all the same quantities.
+  Assert 2*nu in [1.10, 1.30]. Log to TSV on disk.
+
+GATE-41 [R^2/Rg^2 ratio]:
+  REQUIRED: Print the ratio R2/Rg2 for each N at phi=0.001. Show that
+  for the largest N (N=500), the ratio is within [5.5, 7.0] (SAW range).
+  Print the ratio vs N table. Log to disk.
+
+GATE-42 [gCM diffusive scaling]:
+  REQUIRED: Fit log(gCM) vs log(t) in the long-time regime. Print the
+  fitted exponent. Assert it is in [0.90, 1.10]. Print the time range
+  used for the fit and the R^2 of the fit. Log to disk.
+
+GATE-43 [g1 sub-diffusive scaling]:
+  REQUIRED: Fit log(g1) vs log(t) in the SHORT-time regime. Print the
+  fitted exponent. Assert it is in [0.40, 0.70]. Print the time range
+  used for the fit and justify why that range is "short time". Log to disk.
+
+GATE-44 [tau_R scaling]:
+  REQUIRED: Compute tau_R for each N at phi=0.001 using the end-to-end
+  vector autocorrelation (equations (8)/(9) from REF-1). Fit log(tau_R)
+  vs log(N). Print: N values, tau_R values, fitted exponent, R^2. Assert
+  exponent in [2.0, 2.5]. Log to TSV on disk.
+
+GATE-45 [D scaling]:
+  REQUIRED: Compute D for each N at phi=0.001. Fit log(D) vs log(N).
+  Print: N values, D values, fitted exponent, R^2. Assert exponent in
+  [-1.10, -0.90]. Log to TSV on disk.
+
+--- Equilibration & Convergence (46)-(48) ---
+
+GATE-46 [R2/Rg2 plateau]:
+  REQUIRED: For at least 2 state points, print R2 at sweep 1000, 5000,
+  and 10000. Show that the values have converged (|R2_10000 - R2_5000|
+  / R2_5000 < 0.05). Save the sweep-resolved data to static_vs_sweep.tsv.
+
+GATE-47 [Production after equilibration]:
+  REQUIRED: Show the code that determines when equilibration ends and
+  production begins. Print the equilibration sweep count and the first
+  production sweep number. Assert production_start > equilibration_end.
+  Show file:line where this logic lives. Log to disk.
+
+GATE-48 [Dynamic accumulator snapshots]:
+  REQUIRED: Print the reference snapshot times stored by the dynamic
+  accumulator for at least one simulation. Show that they are spaced at
+  sample_interval. Print at least 5 snapshot times and the interval
+  between them. Log to disk.
+
+--- Segment Handling (49)-(51) ---
+
+GATE-49 [Segment type assignment]:
+  REQUIRED: For N=100, segment_size=20, print the segment decomposition:
+  segment index, start bead, end bead, segment type (N_TERMINAL,
+  C_TERMINAL, INNER, BOTH). Assert: first segment is N_TERMINAL or BOTH,
+  last segment is C_TERMINAL or BOTH. Log to disk.
+
+GATE-50 [Segment shuffling]:
+  REQUIRED: Run 100 batches. Track which segment indices were selected
+  in each batch. Print the frequency of each segment index. Assert that
+  ALL segments were selected at least once (ergodic coverage). Log to disk.
+
+GATE-51 [Independent multistep_size and segment_size]:
+  REQUIRED: Run a simulation with multistep_size=M and segment_size=S
+  where M != S. Print both values from the running config. Show that
+  changing S does not change M and vice versa. Log to disk.
+
+--- Output & Reproducibility (52)-(54) ---
+
+GATE-52 [TSV correctness]:
+  REQUIRED: For at least one state point, read the generated TSV files.
+  Print the header row. Assert it matches the expected columns. Print
+  the first 3 data rows. Assert no NaN, no empty cells, no malformed
+  numbers. Log to disk.
+
+GATE-53 [Power-law fits with R^2]:
+  REQUIRED: For every scaling plot, print the fitted exponent AND the
+  R^2 goodness-of-fit. Assert R^2 >= 0.95 for dilute conditions.
+  If R^2 < 0.95, document why. Log all exponents and R^2 values to
+  a summary table on disk.
+
+GATE-54 [Deterministic results]:
+  REQUIRED: (Same evidence as GATE-15.) Two runs with same seed must
+  produce bitwise identical output. Print a hash of the final state
+  from both runs. Assert hashes match. Log to disk.
+
+--- Robustness / Edge Cases (55)-(58) ---
+
+GATE-55 [Short chain segment decomposition]:
+  REQUIRED: Run with N=25, segment_size=20. Print the segment
+  decomposition. Assert it is valid (no out-of-range indices, all beads
+  covered exactly once). Run at least 10 sweeps without error. Log the
+  decomposition and sweep count to disk.
+
+GATE-56 [Single-bead and full-chain segments]:
+  REQUIRED: Create a segment with 1 bead and a segment spanning the
+  full chain. Apply an MC move to each. Assert no index errors, no
+  crashes. Print the segment bounds and the move result for each.
+  Log to disk.
+
+GATE-57 [Empty proposals]:
+  REQUIRED: Create a proposal with n_moved=0. Pass it through the
+  energy computation and acceptance step. Assert no crash, no NaN,
+  delta-E = 0, and the move is accepted (trivially). Print the
+  proposal details and result. Log to disk.
+
+GATE-58 [Volume fraction reasonableness]:
+  REQUIRED: For each N, compute the volume fraction at initialization.
+  Print N, number of chains, box size, computed phi. Assert phi matches
+  the target within 1%. Assert no two beads overlap at initialization
+  (min pairwise distance > sigma). Log to disk.
+
+
+ANTI-HANDWAVING ENFORCEMENT
+============================
+
+The following phrases and patterns are EXPLICITLY BANNED when used as the
+sole justification for marking an item COMPLETE. Any agent that uses these
+without accompanying quantitative evidence logged to disk will have the
+item reverted to PENDING:
+
+  BANNED PHRASES (when used alone as proof):
+    "verified"
+    "confirmed"
+    "works correctly"
+    "functions as expected"
+    "no issues found"
+    "tested and passed"
+    "the code handles this"
+    "this is implemented correctly"
+    "as shown in the code"
+    "by inspection"
+    "by design"
+    "trivially satisfied"
+    "obviously correct"
+    "self-evident from the implementation"
+    "covered by item [N]"
+    "implicitly handled"
+    "not applicable" (without documented justification)
+
+  BANNED COMPLETION PATTERNS:
+    - Marking COMPLETE in the same message as the first investigation
+    - Marking COMPLETE without citing a specific file path containing evidence
+    - Marking COMPLETE based on reading code without running it
+    - Marking multiple items COMPLETE in a single bulk operation without
+      individual evidence for each
+    - Citing a file that does not yet exist on disk
+    - Citing a test that was not actually executed (proposed but not run)
+    - Using "will verify in a later step" and then never returning to it
+
+  REQUIRED COMPLETION FORMAT:
+    Each COMPLETE mark must follow this exact template in the log:
+
+    [REQ-NNN] COMPLETE
+      Evidence type: {test_output | numeric_comparison | file_artifact | runtime_trace}
+      Evidence file: {path to file on disk containing the proof}
+      Key values: {the specific numbers, comparisons, or assertions that prove it}
+      Verified by: {agent ID}
+      Audit status: {PENDING_AUDIT | AUDITED_BY_SENTINEL}
+
+    Items in PENDING_AUDIT status are NOT considered truly complete until the
+    Sentinel agent has independently verified the evidence file exists and
+    contains the claimed values. Only after Sentinel writes AUDITED_BY_SENTINEL
+    is the item genuinely closed.
+
+
 CONSTRAINTS
 ===========
 

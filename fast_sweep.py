@@ -415,7 +415,38 @@ def _metropolis_accept(delta_e, kBT, rng):
 # Fast sweep
 # ---------------------------------------------------------------------------
 
-def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng):
+def fast_perform_pivot_phase(positions_np, seg_info, energy_comp, cfg, stats, rng):
+    """Run only the pivot moves (Phase 2)."""
+    N = cfg.N
+    n_chains = cfg.n_chains
+    box = cfg.box_size
+    inv_box = 1.0 / box
+    half_box = box / 2.0
+    kBT = cfg.kBT
+
+    pos_flat = positions_np.reshape(-1, 3)
+    energy_comp.rebuild_cell_list(pos_flat)
+
+    chain_perm = rng.permutation(n_chains)
+    for c_idx in chain_perm:
+        c = int(c_idx)
+        chain_pos = positions_np[c]
+        p = _propose_pivot(chain_pos, c, N, box, inv_box, half_box, rng)
+        if p.n_moved == 0:
+            continue
+        de = energy_comp.compute_delta_energy(
+            p.chain_idx, p.bead_start, p.n_moved,
+            p.old_pos, p.new_pos, N)
+        accepted = _metropolis_accept(de, kBT, rng)
+        stats.record('pivot', accepted)
+        if accepted:
+            positions_np[p.chain_idx, p.bead_start:p.bead_start + p.n_moved] = p.new_pos
+            _validate_boundary_bonds_np(positions_np, p.chain_idx, p.bead_start,
+                                         p.n_moved, N, cfg.l0, box, inv_box)
+
+
+def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng,
+                       skip_pivot=False):
     """
     Perform one full MC sweep using numpy/numba fast path.
 
@@ -617,6 +648,9 @@ def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng):
                     delta_e[j] += correction
 
     # ── Phase 2: Pivot moves ────────────────────────────────────────
+    if skip_pivot:
+        return
+
     pos_flat = positions_np.reshape(-1, 3)
     energy_comp.rebuild_cell_list(pos_flat)
 

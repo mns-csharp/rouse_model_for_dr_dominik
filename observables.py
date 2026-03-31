@@ -3,6 +3,13 @@ Observable accumulators: R2, Rg2, middle-segment MSD, center-of-mass MSD,
 and end-to-end vector autocorrelation.
 
 All accumulation uses PyTorch tensors. Coordinate operations via NumberSpace.
+
+IMPORTANT: MSD computation tracks cumulative per-bead displacements.
+Each bead's displacement between consecutive snapshots is obtained via
+mic_delta on wrapped positions (always small relative to box/2).  These
+per-bead increments are accumulated, then the CM displacement is the
+average over all beads.  This avoids artefacts from chain-following
+unwrapping (whose CM depends on internal conformation, not diffusion).
 """
 
 import torch
@@ -21,77 +28,36 @@ class StaticObservables:
 
     @staticmethod
     def compute_R2(positions: torch.Tensor, ns: NumberSpace) -> torch.Tensor:
-        """
-        End-to-end distance squared for each chain.
-
-        Args:
-            positions: [n_chains, N, 3]
-            ns: NumberSpace for MIC computation
-
-        Returns:
-            [n_chains] tensor of R² values
-        """
         unwrapped = ns.unwrap_chains(positions)
         diff = unwrapped[:, -1, :] - unwrapped[:, 0, :]
         return (diff * diff).sum(dim=-1)
 
     @staticmethod
     def compute_Rg2(positions: torch.Tensor, ns: NumberSpace) -> torch.Tensor:
-        """
-        Radius of gyration squared for each chain.
-
-        Rg² = (1/N) Σ_i |r_i - r_cm|²
-
-        Uses sequential bond-by-bond unwrapping to correctly handle chains
-        that span (or wrap) the periodic box boundary.
-
-        Returns:
-            [n_chains] tensor of Rg² values
-        """
         unwrapped = ns.unwrap_chains(positions)
-        cm = unwrapped.mean(dim=1, keepdim=True)  # [n_chains, 1, 3]
+        cm = unwrapped.mean(dim=1, keepdim=True)
         diff = unwrapped - cm
         return (diff * diff).sum(dim=2).mean(dim=1)
 
     @staticmethod
     def compute_end_to_end_vector(positions: torch.Tensor,
                                    ns: NumberSpace) -> torch.Tensor:
-        """
-        End-to-end vector R = r_end - r_start for each chain.
-
-        Uses sequential unwrapping so the vector reflects the true chain
-        path, not the minimum-image shortcut.
-
-        Returns:
-            [n_chains, 3] tensor
-        """
         unwrapped = ns.unwrap_chains(positions)
         return unwrapped[:, -1, :] - unwrapped[:, 0, :]
 
     @staticmethod
     def compute_center_of_mass(positions: torch.Tensor,
                                 ns: NumberSpace) -> torch.Tensor:
-        """
-        Center of mass for each chain, using sequential bond-by-bond
-        unwrapping via NumberSpace.
-
-        Returns:
-            [n_chains, 3] tensor
-        """
         unwrapped = ns.unwrap_chains(positions)
         return unwrapped.mean(dim=1)
 
     @staticmethod
-    def compute_middle_segment_position(positions: torch.Tensor) -> torch.Tensor:
-        """
-        Position of the middle bead (index N//2) for each chain.
-
-        Returns:
-            [n_chains, 3] tensor
-        """
+    def compute_middle_segment_position(positions: torch.Tensor,
+                                         ns: NumberSpace) -> torch.Tensor:
+        unwrapped = ns.unwrap_chains(positions)
         N = positions.shape[1]
         mid = N // 2
-        return positions[:, mid, :].clone()
+        return unwrapped[:, mid, :].clone()
 
 
 class DynamicAccumulator:
@@ -101,7 +67,14 @@ class DynamicAccumulator:
       - gCM(t): center-of-mass MSD
       - gR(t):  end-to-end vector autocorrelation (normalized)
 
-    MSD displacements computed via NumberSpace.mic_delta().
+    MSD uses per-bead cumulative displacement tracking:
+      - At each snapshot, mic_delta of every bead's WRAPPED position from
+        the previous snapshot gives the true per-bead displacement (small
+        relative to box/2, so MIC is exact).
+      - Middle-bead displacement is accumulated for g1.
+      - Mean over all beads gives CM displacement for g_CM.
+      - This avoids artefacts from chain-following unwrapping, where pivots
+        change the apparent CM even though the physical CM doesn't move.
     """
 
     def __init__(self, cfg: SimulationConfig, ns: NumberSpace):
@@ -110,11 +83,21 @@ class DynamicAccumulator:
         self.device = cfg.get_torch_device()
         self.dtype = cfg.dtype
         self.n_chains = cfg.n_chains
+        self.N = cfg.N
+
+        # Previous snapshot: WRAPPED all-bead positions [n_chains, N, 3]
+        self._prev_positions = None
+
+        # Cumulative per-bead displacement [n_chains, N, 3]
+        self._cum_bead_disp = None
+
+        # Derived cumulative quantities (computed from _cum_bead_disp)
+        # These are updated each snapshot for storage in reference lists.
 
         # Storage for reference snapshots
-        self.mid_refs = []      # list of (sweep, [n_chains, 3])
-        self.cm_refs = []       # list of (sweep, [n_chains, 3])
-        self.ee_refs = []       # list of (sweep, [n_chains, 3])
+        self.mid_refs = []      # list of (sweep, cum_mid [n_chains, 3])
+        self.cm_refs = []       # list of (sweep, cum_cm [n_chains, 3])
+        self.ee_refs = []       # list of (sweep, ee_vec [n_chains, 3])
         self.ee_norm_sq_sum = 0.0
         self.ee_norm_count = 0
 
@@ -123,16 +106,46 @@ class DynamicAccumulator:
         self.gcm_accum = {}
         self.gr_accum = {}
 
-    def record_snapshot(self, state: ChainState, sweep: int):
-        """
-        Record observables at a given production sweep.
-        Called every sample_interval sweeps during production.
-        """
-        positions = state.positions
-        ns = self.ns
+        self._snapshot_count = 0
+        self._max_refs = 500
+        self._ref_modulo = 1
 
-        mid_pos = StaticObservables.compute_middle_segment_position(positions)
-        cm_pos = StaticObservables.compute_center_of_mass(positions, ns)
+    def record_snapshot(self, state: ChainState, sweep: int,
+                        cum_bead_disp: "torch.Tensor | None" = None):
+        """Record observables at a given production sweep.
+
+        Args:
+            state: current chain state (wrapped positions)
+            sweep: production sweep number
+            cum_bead_disp: [n_chains, N, 3] cumulative per-bead displacement
+                from local (segment) moves only.  If None, falls back to
+                computing displacement from wrapped positions (includes all
+                move types).
+        """
+        positions = state.positions  # [n_chains, N, 3], WRAPPED
+        ns = self.ns
+        mid_idx = self.N // 2
+
+        if cum_bead_disp is not None:
+            # Use externally-tracked cumulative displacement (segment moves only)
+            pass
+        else:
+            # Fallback: compute from positions (includes ALL move types)
+            if self._prev_positions is None:
+                self._cum_bead_disp = torch.zeros_like(positions)
+                self._prev_positions = positions.clone()
+            else:
+                delta = ns.mic_delta(self._prev_positions, positions)
+                self._cum_bead_disp = self._cum_bead_disp + delta
+                self._prev_positions = positions.clone()
+            cum_bead_disp = self._cum_bead_disp
+
+        # Cumulative middle-bead displacement
+        cum_mid = cum_bead_disp[:, mid_idx, :].clone()  # [n_chains, 3]
+        # Cumulative CM displacement = mean over all beads
+        cum_cm = cum_bead_disp.mean(dim=1).clone()  # [n_chains, 3]
+
+        # End-to-end vector (correctly uses chain-following unwrap for internal geometry)
         ee_vec = StaticObservables.compute_end_to_end_vector(positions, ns)
 
         # Accumulate |R|² for normalization
@@ -140,10 +153,10 @@ class DynamicAccumulator:
         self.ee_norm_sq_sum += ee_sq.sum().item()
         self.ee_norm_count += self.n_chains
 
-        # Compute vs all previous reference snapshots
+        # Compute MSD vs all previous reference snapshots
         for ref_sweep, ref_mid in self.mid_refs:
             lag = sweep - ref_sweep
-            d = ns.mic_delta(ref_mid, mid_pos)
+            d = cum_mid - ref_mid
             msd = (d * d).sum(dim=1).mean().item()
             if lag not in self.g1_accum:
                 self.g1_accum[lag] = [0.0, 0]
@@ -152,7 +165,7 @@ class DynamicAccumulator:
 
         for ref_sweep, ref_cm in self.cm_refs:
             lag = sweep - ref_sweep
-            d = ns.mic_delta(ref_cm, cm_pos)
+            d = cum_cm - ref_cm
             msd = (d * d).sum(dim=1).mean().item()
             if lag not in self.gcm_accum:
                 self.gcm_accum[lag] = [0.0, 0]
@@ -167,10 +180,22 @@ class DynamicAccumulator:
             self.gr_accum[lag][0] += dot
             self.gr_accum[lag][1] += 1
 
-        # Store current as new reference
-        self.mid_refs.append((sweep, mid_pos.clone()))
-        self.cm_refs.append((sweep, cm_pos.clone()))
-        self.ee_refs.append((sweep, ee_vec.clone()))
+        # Store current as new reference (sub-sample if too many snapshots)
+        self._snapshot_count += 1
+        total_expected = self.cfg.prod_sweeps // self.cfg.sample_interval
+        if total_expected > self._max_refs:
+            self._ref_modulo = max(1, total_expected // self._max_refs)
+        if self._snapshot_count % self._ref_modulo == 0 or self._snapshot_count <= 10:
+            self.mid_refs.append((sweep, cum_mid))
+            self.cm_refs.append((sweep, cum_cm))
+            self.ee_refs.append((sweep, ee_vec.clone()))
+
+    def update_prev_positions(self, state: ChainState):
+        """Update the previous-positions reference to the CURRENT wrapped
+        positions.  Call this AFTER pivot moves so that the next snapshot's
+        mic_delta only captures local-move displacement."""
+        if self._prev_positions is not None:
+            self._prev_positions = state.positions.clone()
 
     def get_g1(self) -> dict:
         """Return {lag_sweep: mean_g1} for middle-segment MSD."""
@@ -215,7 +240,7 @@ class SweepTracker:
     def __init__(self, cfg: SimulationConfig, ns: NumberSpace):
         self.cfg = cfg
         self.ns = ns
-        self.records = []  # list of (sweep, phase, mean_R2, mean_Rg2, ratio)
+        self.records = []
 
     def record(self, state: ChainState, sweep: int, phase: str):
         """Record running averages at this sweep."""

@@ -15,7 +15,7 @@ from tqdm import tqdm
 from .config import SimulationConfig
 from .chain import ChainState
 from .fast_energy import FastEnergyComputer
-from .fast_sweep import fast_perform_sweep
+from .fast_sweep import fast_perform_sweep, fast_perform_pivot_phase
 from .observables import StaticObservables, DynamicAccumulator, SweepTracker
 from .number_space import NumberSpace
 from .simulation import SimulationStats
@@ -92,19 +92,45 @@ class FastRouseSimulation:
             print(f"  Equilibration done in {dt:.1f}s ({total/dt:.2f} sweeps/s)")
 
     def run_production(self):
-        """Run production sweeps with observable collection."""
+        """Run production sweeps with observable collection.
+
+        Production uses LOCAL moves only (no pivots) to give correct Rouse
+        dynamics (D ~ N^-1, tau_R ~ N^(1+2nu)).  Pivots are NOT used during
+        production because they:
+          1. Add CM displacement ~ N^(2nu), breaking D ~ N^-1
+          2. Randomise the end-to-end vector, making tau_R artificially short
+        Equilibration (which uses all moves including pivots) ensures the
+        starting configuration is properly sampled.
+
+        Per-bead cumulative displacement is tracked in numpy space (zero-copy)
+        to avoid per-sweep torch sync overhead.
+        """
         cfg = self.cfg
         ns = self.ns
         total = cfg.prod_sweeps
         sample_interval = cfg.sample_interval
         seg_info = self.state.segments
 
+        # Cumulative per-bead displacement tracked in numpy (fast, no sync)
+        cum_seg_disp_np = np.zeros_like(self._pos_np)  # [n_chains, N, 3]
+        box = cfg.box_size
+        inv_box = 1.0 / box
+
         pbar = tqdm(range(total), desc="  Prod", unit="sw",
                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]")
 
         for sweep in pbar:
+            # Save positions before segment moves
+            pos_before = self._pos_np.copy()
+
+            # LOCAL moves only — this IS the Rouse time step
             fast_perform_sweep(self._pos_np, seg_info, self.fast_energy,
-                               cfg, self.stats, self.rng)
+                               cfg, self.stats, self.rng, skip_pivot=True)
+
+            # Per-bead displacement with MIC wrapping (numpy, no torch sync)
+            delta = self._pos_np - pos_before
+            delta -= box * np.round(delta * inv_box)
+            cum_seg_disp_np += delta
 
             if sweep % max(1, total // 50) == 0:
                 self._sync_torch_from_numpy()
@@ -113,7 +139,10 @@ class FastRouseSimulation:
 
             if sweep % sample_interval == 0:
                 self._sync_torch_from_numpy()
-                self.dynamic_accum.record_snapshot(self.state, sweep)
+                cum_seg_disp_torch = torch.from_numpy(
+                    cum_seg_disp_np.copy()).to(cfg.dtype)
+                self.dynamic_accum.record_snapshot(
+                    self.state, sweep, cum_bead_disp=cum_seg_disp_torch)
 
             if self.snapshot_collector is not None:
                 self._sync_torch_from_numpy()

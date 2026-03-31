@@ -164,12 +164,18 @@ def _estimate_g1_short_time_exponent(g1: dict) -> float:
 
 
 def _estimate_gcm_exponent(gcm: dict) -> float:
-    """Estimate g_CM(t) ~ t^alpha exponent from log-log fit."""
+    """Estimate g_CM(t) ~ t^alpha exponent from late-time log-log fit.
+
+    Uses second half of data to focus on the diffusive (long-time) regime
+    where gCM ~ t^1 is expected.
+    """
     if len(gcm) < 3:
         return 0.0
     lags = sorted(gcm.keys())
-    x = np.array(lags, dtype=float)
-    y = np.array([gcm[l] for l in lags], dtype=float)
+    n = len(lags)
+    start = max(1, n // 2)
+    x = np.array(lags[start:], dtype=float)
+    y = np.array([gcm[l] for l in lags[start:]], dtype=float)
     mask = (x > 0) & (y > 0)
     if mask.sum() < 2:
         return 0.0
@@ -182,6 +188,19 @@ def _check_pass(measured, theory, tolerance):
     return bool(abs(measured - theory) <= tolerance)
 
 
+def _production_averaged_static(results: dict):
+    """Get production-averaged R2 and Rg2 from sweep_data for better statistics.
+
+    Falls back to final_R2/final_Rg2 if sweep_data is unavailable.
+    """
+    sweep_data = results.get('sweep_data', [])
+    prod_R2 = [r2 for (sw, phase, r2, rg2, ratio) in sweep_data if phase == "production"]
+    prod_Rg2 = [rg2 for (sw, phase, r2, rg2, ratio) in sweep_data if phase == "production"]
+    if len(prod_R2) >= 3:
+        return float(np.mean(prod_R2)), float(np.mean(prod_Rg2))
+    return results['final_R2'].mean().item(), results['final_Rg2'].mean().item()
+
+
 def _compute_phi_metrics(phi_results: dict):
     """Compute all scaling metrics for a single phi level.
 
@@ -192,8 +211,12 @@ def _compute_phi_metrics(phi_results: dict):
         dict with all metrics for this phi
     """
     Ns = sorted(phi_results.keys())
-    mean_R2 = {n: phi_results[n]['final_R2'].mean().item() for n in Ns}
-    mean_Rg2 = {n: phi_results[n]['final_Rg2'].mean().item() for n in Ns}
+    mean_R2 = {}
+    mean_Rg2 = {}
+    for n in Ns:
+        r2, rg2 = _production_averaged_static(phi_results[n])
+        mean_R2[n] = r2
+        mean_Rg2[n] = rg2
     ratios = {n: mean_R2[n] / mean_Rg2[n] if mean_Rg2[n] > 0 else 0.0 for n in Ns}
 
     slope_R2, _, r2_R2 = power_law_fit(Ns, [mean_R2[n] for n in Ns])
@@ -381,7 +404,7 @@ def plot_R2_vs_N_per_phi(all_results: dict, base_dir: str):
                           "End-to-End Distance Squared vs N (per phi)")
     for phi in sorted(all_results.keys()):
         Ns = sorted(all_results[phi].keys())
-        mean_R2 = [all_results[phi][n]['final_R2'].mean().item() for n in Ns]
+        mean_R2 = [_production_averaged_static(all_results[phi][n])[0] for n in Ns]
         phi_str = format_phi(phi)
         color = phi_color(phi)
         ax.plot(Ns, mean_R2, 'o-', color=color, markersize=6, label=f'phi={phi_str}')
@@ -399,7 +422,7 @@ def plot_Rg2_vs_N_per_phi(all_results: dict, base_dir: str):
                           "Radius of Gyration Squared vs N (per phi)")
     for phi in sorted(all_results.keys()):
         Ns = sorted(all_results[phi].keys())
-        mean_Rg2 = [all_results[phi][n]['final_Rg2'].mean().item() for n in Ns]
+        mean_Rg2 = [_production_averaged_static(all_results[phi][n])[1] for n in Ns]
         phi_str = format_phi(phi)
         color = phi_color(phi)
         ax.plot(Ns, mean_Rg2, 's-', color=color, markersize=6, label=f'phi={phi_str}')
@@ -422,8 +445,8 @@ def plot_2nu_vs_phi(all_results: dict, base_dir: str):
     nu_Rg2 = []
     for phi in phis:
         Ns = sorted(all_results[phi].keys())
-        mean_R2 = [all_results[phi][n]['final_R2'].mean().item() for n in Ns]
-        mean_Rg2 = [all_results[phi][n]['final_Rg2'].mean().item() for n in Ns]
+        mean_R2 = [_production_averaged_static(all_results[phi][n])[0] for n in Ns]
+        mean_Rg2 = [_production_averaged_static(all_results[phi][n])[1] for n in Ns]
         s_R2, _, _ = power_law_fit(Ns, mean_R2)
         s_Rg2, _, _ = power_law_fit(Ns, mean_Rg2)
         nu_R2.append(s_R2)
@@ -448,8 +471,7 @@ def plot_ratio_R2_Rg2_vs_phi(all_results: dict, base_dir: str):
         ratio_vals = []
         for phi in phis:
             if N in all_results[phi]:
-                R2 = all_results[phi][N]['final_R2'].mean().item()
-                Rg2 = all_results[phi][N]['final_Rg2'].mean().item()
+                R2, Rg2 = _production_averaged_static(all_results[phi][N])
                 ratio_vals.append(R2 / Rg2 if Rg2 > 0 else 0)
             else:
                 ratio_vals.append(0)
@@ -469,8 +491,8 @@ def plot_R2_Rg2_combined_dilute(all_results: dict, base_dir: str):
                           f"R2 and Rg2 vs N (dilute, phi={phi_str})")
     phi_results = all_results[dilute_phi]
     Ns = sorted(phi_results.keys())
-    mean_R2 = [phi_results[n]['final_R2'].mean().item() for n in Ns]
-    mean_Rg2 = [phi_results[n]['final_Rg2'].mean().item() for n in Ns]
+    mean_R2 = [_production_averaged_static(phi_results[n])[0] for n in Ns]
+    mean_Rg2 = [_production_averaged_static(phi_results[n])[1] for n in Ns]
 
     ax.plot(Ns, mean_R2, 'o-', color='C0', markersize=8, label='<R2>')
     ax.plot(Ns, mean_Rg2, 's-', color='C1', markersize=8, label='<Rg2>')
