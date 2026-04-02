@@ -119,7 +119,7 @@ class SimulationConfig:
     prod_sweeps: int          # Production sweeps
     box_size: float           # Cubic box side length (Angstrom)
     seed: int = SEED
-    device: str = "cpu"       # "cpu" or "cuda"
+    device: str = ""          # REQUIRED: must be set explicitly (no default)
     dtype: torch.dtype = torch.float64
 
     # Physical parameters (fixed)
@@ -143,8 +143,15 @@ class SimulationConfig:
     use_batched_mode: bool = False  # batched proposals + delta-E (works on CPU and GPU)
 
     @classmethod
-    def for_chain_length(cls, N: int, device: str = "cpu") -> "SimulationConfig":
-        """Create config for a standard chain length (legacy single-phi mode)."""
+    def for_chain_length(cls, N: int, device: str) -> "SimulationConfig":
+        """Create config for a standard chain length (legacy single-phi mode).
+
+        Args:
+            N: chain length (must be in CHAIN_CONFIGS)
+            device: torch device string -- REQUIRED, no default
+        """
+        if not device:
+            raise ValueError("device is required (no default). Pass 'cpu' or 'cuda'.")
         n_chains, eq_sweeps, prod_sweeps, box_size = CHAIN_CONFIGS[N]
         return cls(
             N=N,
@@ -156,14 +163,23 @@ class SimulationConfig:
         )
 
     @classmethod
-    def for_state_point(cls, N: int, phi: float, device: str = "cpu",
+    def for_state_point(cls, N: int, phi: float, device: str,
                         eq_sweeps: int = 10000, prod_sweeps: int = 10000
                         ) -> "SimulationConfig":
         """Create config for a specific (N, phi) state point.
 
         Computes chain count and box size from the volume fraction formula:
             L_box = sigma * (n_chains * N / phi)^(1/3)
+
+        Args:
+            N: beads per chain
+            phi: volume fraction
+            device: torch device string -- REQUIRED, no default
+            eq_sweeps: equilibration sweeps
+            prod_sweeps: production sweeps
         """
+        if not device:
+            raise ValueError("device is required (no default). Pass 'cpu' or 'cuda'.")
         n_chains = compute_n_chains(N, phi)
         box_size = compute_box_size(N, n_chains, phi)
         # Adaptive sample interval: short chains relax fast, need finer sampling
@@ -216,6 +232,11 @@ class SimulationConfig:
 
     def get_torch_device(self) -> torch.device:
         d = self.device
+        if not d:
+            raise ValueError(
+                "SimulationConfig.device is not set. "
+                "Device must be explicitly provided (no default)."
+            )
         if d == "gpu":
             d = "cuda"
         return torch.device(d)

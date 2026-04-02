@@ -22,7 +22,11 @@ from .number_space import NumberSpace
 # Compiled GPU kernels for batched energy computation (FP32)
 # ---------------------------------------------------------------------------
 
-_COMPILE_MODE = 'reduce-overhead'
+# 'reduce-overhead' enables CUDA graphs, which require static tensor shapes.
+# MC simulations have dynamic shapes (varying segment sizes per sweep),
+# causing CUDA graph capture failures (cudaErrorUnknown) after many distinct
+# shapes are encountered. Use 'default' for kernel fusion without CUDA graphs.
+_COMPILE_MODE = 'default'
 
 def _batched_delta_e_kernel_impl(pos_f32, old_batch, new_batch,
                                   gs_tensor, nm_tensor,

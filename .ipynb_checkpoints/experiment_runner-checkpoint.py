@@ -1,11 +1,6 @@
 """
 Comprehensive experiment runner for Rouse model MC simulation.
 Tests: multistep MC batch sizes, GPU vs CPU, CA contact energy.
-
-Usage:
-    python -m rouse_model_python.experiment_runner --device {cpu|gpu|mixed} --is_parallel {true|false}
-
-Both --device and --is_parallel are REQUIRED.
 """
 
 import sys, os, time, json
@@ -19,7 +14,6 @@ from rouse_model_python.chain import ChainState
 from rouse_model_python.number_space import NumberSpace
 from rouse_model_python.observables import StaticObservables
 from rouse_model_python.simulation import RouseSimulation, SimulationStats
-from rouse_model_python.execution_policy import parse_execution_args
 
 
 def check_bonds(pos_np_or_tensor, ns, l0):
@@ -111,17 +105,8 @@ def run_fast_experiment(N, n_chains, eq_sweeps, prod_sweeps, move_size,
 
 
 def run_gpu_experiment(N, n_chains, eq_sweeps, prod_sweeps, move_size,
-                       contact_energy=0.0, box_size=None, seed=42,
-                       torch_device=""):
-    """Run experiment with PyTorch GPU path.
-
-    Args:
-        torch_device: resolved device string from execution policy (no auto-detect).
-                      REQUIRED -- no default device.
-    """
-    if not torch_device:
-        raise ValueError("torch_device is required (no default). "
-                         "Pass the resolved device from execution policy.")
+                       contact_energy=0.0, box_size=None, seed=42):
+    """Run experiment with PyTorch GPU path."""
     from rouse_model_python.multistep_mc import perform_sweep, MOVE_SIZE as MC_MOVE_SIZE
     import rouse_model_python.multistep_mc as mc
     from rouse_model_python.energy import EnergyComputer
@@ -129,7 +114,7 @@ def run_gpu_experiment(N, n_chains, eq_sweeps, prod_sweeps, move_size,
     old_ms = mc.MOVE_SIZE
     mc.MOVE_SIZE = move_size
 
-    device = torch_device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     if box_size is None:
         box_size = CHAIN_CONFIGS.get(N, (n_chains, eq_sweeps, prod_sweeps, 300.0))[3]
 
@@ -137,7 +122,7 @@ def run_gpu_experiment(N, n_chains, eq_sweeps, prod_sweeps, move_size,
         N=N, n_chains=n_chains, eq_sweeps=eq_sweeps, prod_sweeps=prod_sweeps,
         box_size=box_size, seed=seed, device=device,
         contact_energy=contact_energy,
-        use_batched_mode=("cuda" in device),
+        use_batched_mode=(device == "cuda"),
     )
 
     ns = NumberSpace.from_config(cfg)
@@ -211,9 +196,6 @@ def print_result(r, label=""):
 
 
 if __name__ == "__main__":
-    policy, caps, cli_args = parse_execution_args()
-    torch_dev = policy.torch_device
-
     results = []
     # Test params: N=50, 30 chains, 500+500 sweeps for fast iteration
     N = 50; NC = 30; EQ = 500; PROD = 500; BOX = 238.0
@@ -231,15 +213,15 @@ if __name__ == "__main__":
 
     # ── Experiment B: GPU vs CPU ──────────────────────────────────
     print("\n\n### EXPERIMENT B: GPU vs CPU ###")
+    # GPU batched
     for ms in [1, 10, 20]:
         try:
-            r = run_gpu_experiment(N, NC, EQ, PROD, move_size=ms,
-                                   box_size=BOX, torch_device=torch_dev)
+            r = run_gpu_experiment(N, NC, EQ, PROD, move_size=ms, box_size=BOX)
             results.append(r)
-            print_result(r, f"MOVE_SIZE={ms} ({policy.device}/PyTorch)")
+            print_result(r, f"MOVE_SIZE={ms} (GPU/PyTorch)")
         except Exception as e:
-            print(f"  {policy.device} MOVE_SIZE={ms} FAILED: {e}")
-            results.append({"backend": policy.device, "move_size": ms, "error": str(e)})
+            print(f"  GPU MOVE_SIZE={ms} FAILED: {e}")
+            results.append({"backend": "gpu_cuda", "move_size": ms, "error": str(e)})
 
     # ── Experiment C: CA Contact Energy ───────────────────────────
     print("\n\n### EXPERIMENT C: CA Contact Energy ###")
@@ -251,18 +233,17 @@ if __name__ == "__main__":
 
     # ── Experiment D: Larger system (N=250) ───────────────────────
     print("\n\n### EXPERIMENT D: Larger system scaling ###")
-    for backend_label in ["cpu", "gpu"]:
+    for backend in ["cpu", "gpu"]:
         try:
-            if backend_label == "cpu":
+            if backend == "cpu":
                 r = run_fast_experiment(250, 10, 200, 200, move_size=20, box_size=293.0)
             else:
-                r = run_gpu_experiment(250, 10, 200, 200, move_size=20,
-                                       box_size=293.0, torch_device=torch_dev)
+                r = run_gpu_experiment(250, 10, 200, 200, move_size=20, box_size=293.0)
             results.append(r)
-            print_result(r, f"N=250 ({backend_label})")
+            print_result(r, f"N=250 ({backend})")
         except Exception as e:
-            print(f"  N=250 {backend_label} FAILED: {e}")
-            results.append({"backend": backend_label, "N": 250, "error": str(e)})
+            print(f"  N=250 {backend} FAILED: {e}")
+            results.append({"backend": backend, "N": 250, "error": str(e)})
 
     # Save results
     out_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

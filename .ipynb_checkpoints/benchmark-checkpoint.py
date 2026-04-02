@@ -1,11 +1,6 @@
 """
 Benchmark: profile perform_sweep for N=25 and N=250 across modes.
 Identifies bottlenecks by timing individual components.
-
-Usage:
-    python -m rouse_model_python.benchmark --device {cpu|gpu|mixed} --is_parallel {true|false}
-
-Both --device and --is_parallel are REQUIRED.
 """
 
 import sys, os, time, random, math
@@ -22,7 +17,6 @@ from rouse_model_python.energy import EnergyComputer
 from rouse_model_python.number_space import NumberSpace
 from rouse_model_python.multistep_mc import perform_sweep, MOVE_SIZE
 from rouse_model_python.simulation import SimulationStats
-from rouse_model_python.execution_policy import parse_execution_args
 
 # ---------------------------------------------------------------------------
 # Monkey-patch timing instrumentation
@@ -83,19 +77,12 @@ def set_seeds(seed=SEED):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.device_count() > 0:
+    if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
 
 def run_benchmark(N, device, batched, n_sweeps=5):
-    """Run n_sweeps and return per-sweep time + component breakdown.
-
-    Args:
-        N: chain length
-        device: torch device string -- explicitly provided, no default
-        batched: whether to use batched energy computation
-        n_sweeps: number of sweeps to benchmark
-    """
+    """Run n_sweeps and return per-sweep time + component breakdown."""
     TIMINGS.clear()
     set_seeds()
 
@@ -166,24 +153,18 @@ def print_report(N, device, batched, wall, n_sweeps, timings):
 
 
 def main():
-    policy, caps, cli_args = parse_execution_args()
-
     instrument()
 
-    # Determine which device configs to benchmark based on policy
-    torch_dev = policy.torch_device
-    devices_to_test = [torch_dev]
-    if policy.device == "mixed" and caps.n_gpus > 0:
-        devices_to_test = ["cpu", "cuda"]
-    elif policy.device == "gpu":
-        devices_to_test = ["cuda"]
-    elif policy.device == "cpu":
-        devices_to_test = ["cpu"]
+    has_gpu = torch.cuda.is_available()
+    if has_gpu:
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("No GPU available — skipping CUDA runs")
 
     n_sweeps = 5
     configs = []
     for N in [25, 250]:
-        for device in devices_to_test:
+        for device in (["cpu", "cuda"] if has_gpu else ["cpu"]):
             for batched in [False, True]:
                 configs.append((N, device, batched))
 

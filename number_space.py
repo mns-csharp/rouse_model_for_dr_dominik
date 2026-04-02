@@ -42,7 +42,12 @@ class NumberSpace:
         self.box_size = box_size
         self.half_box = box_size / 2.0
         self.sigma = sigma
-        self.device = device or torch.device("cpu")
+        if device is None:
+            raise ValueError(
+                "NumberSpace requires an explicit device (no default). "
+                "Use NumberSpace.from_config(cfg) or pass device=torch.device('cpu')."
+            )
+        self.device = device
         self.dtype = dtype
 
         # Precompute inverse for fast division

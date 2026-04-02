@@ -2,10 +2,7 @@
 Parallelized campaign runner: runs each chain length N in a separate process.
 
 Usage:
-    python3 -m rouse_model_python.run_parallel_campaign --device {cpu|gpu|mixed} --is_parallel {true|false}
-
-Both --device and --is_parallel are REQUIRED. The program will exit
-with an error if either is missing. There is no default device.
+    python3 -m rouse_model_python.run_parallel_campaign
 """
 
 import sys
@@ -15,8 +12,6 @@ import json
 import pickle
 import random
 import shutil
-import warnings
-warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
 import numpy as np
 import torch
 import multiprocessing as mp
@@ -28,23 +23,8 @@ from rouse_model_python.config import (
     SimulationConfig, SEED, PHI_VALUES, CHAIN_LENGTHS, format_phi,
     compute_n_chains, compute_box_size, SIGMA,
 )
-from rouse_model_python.execution_policy import (
-    parse_execution_args, ExecutionPolicy, SystemCapabilities,
-    assign_devices_for_simulations, check_vram_headroom, estimate_vram_mb,
-)
 from rouse_model_python.fast_simulation import FastRouseSimulation
-from rouse_model_python.simulation import RouseSimulation
-from rouse_model_python.execution_policy import cuda_available as _cuda_available
-
-def _gpu_fast_available():
-    """Check if GPU fast mode (CuPy + CUDA) is available."""
-    if not _cuda_available():
-        return False
-    try:
-        import cupy  # noqa: F401
-        return True
-    except ImportError:
-        return False
+# Ensure we pick up the v2 DELIVERABLE_DIR from run_campaign
 from rouse_model_python.io_utils import (
     write_all_tsvs, generate_all_plots, write_validation_summary,
     write_readme, write_gitattributes, ensure_dir,
@@ -56,58 +36,24 @@ from rouse_model_python.run_campaign import (
 )
 
 
-def run_single_N(N, phi_values, seed_base, results_dir,
-                  torch_device, use_batched_mode, use_fast_mode,
-                  eq_sweeps=10000, prod_sweeps=10000):
-    """Run all phi levels for a single chain length N. Saves results to pickle.
-
-    Args:
-        N: chain length
-        phi_values: list of volume fractions to simulate
-        seed_base: base random seed
-        results_dir: directory for intermediate pickle files
-        torch_device: resolved torch device string (from execution policy)
-        use_batched_mode: whether to use GPU batched proposals
-        use_fast_mode: whether to use numba+numpy fast path
-        eq_sweeps: equilibration sweeps per simulation
-        prod_sweeps: production sweeps per simulation
-    """
+def run_single_N(N, phi_values, seed_base, results_dir):
+    """Run all phi levels for a single chain length N. Saves results to pickle."""
     import numpy as np
     import torch
     random.seed(seed_base + N)
     np.random.seed(seed_base + N)
     torch.manual_seed(seed_base + N)
 
-    # GPU fast mode uses CUDA device; CPU fast mode forces CPU
-    use_gpu_fast = use_fast_mode and _gpu_fast_available()
-    if use_gpu_fast:
-        device_for_cfg = torch_device
-    elif use_fast_mode:
-        device_for_cfg = "cpu"
-    else:
-        device_for_cfg = torch_device
-
     results_for_N = {}  # results_for_N[phi] = results_dict
 
     for phi_idx, phi in enumerate(phi_values):
         phi_str = format_phi(phi)
-        cfg = SimulationConfig.for_state_point(N, phi, device=device_for_cfg,
-                                               eq_sweeps=eq_sweeps,
-                                               prod_sweeps=prod_sweeps)
+        cfg = SimulationConfig.for_state_point(N, phi, device='cpu')
         cfg.seed = seed_base + N * 100 + phi_idx
-        cfg.use_batched_mode = use_batched_mode and not use_fast_mode
-        mode_label = "GPU fast" if use_gpu_fast else ("CPU fast" if use_fast_mode else "PyTorch")
         print(f"\n[W-N{N}] Starting N={N}, phi={phi_str}, "
-              f"chains={cfg.n_chains}, box={cfg.box_size:.1f}A, "
-              f"device={device_for_cfg}, mode={mode_label}", flush=True)
+              f"chains={cfg.n_chains}, box={cfg.box_size:.1f}A", flush=True)
 
-        if use_gpu_fast:
-            from rouse_model_python.gpu_simulation import GPURouseSimulation
-            sim = GPURouseSimulation(cfg)
-        elif use_fast_mode:
-            sim = FastRouseSimulation(cfg)
-        else:
-            sim = RouseSimulation(cfg)
+        sim = FastRouseSimulation(cfg)
         results = sim.run()
 
         # Write TSV files immediately
@@ -136,18 +82,8 @@ def run_single_N(N, phi_values, seed_base, results_dir,
     return N
 
 
-def run_all_parallel(policy: ExecutionPolicy, caps: SystemCapabilities,
-                     use_fast_mode: bool = True,
-                     eq_sweeps: int = 10000, prod_sweeps: int = 10000):
-    """Run all 30 state-point simulations in parallel (one process per N).
-
-    Args:
-        policy: resolved execution policy from mandatory CLI args
-        caps: system capabilities (GPU count, CPU cores)
-        use_fast_mode: if True, use numba+numpy fast path
-        eq_sweeps: equilibration sweeps per simulation
-        prod_sweeps: production sweeps per simulation
-    """
+def run_all_parallel():
+    """Run all 30 state-point simulations in parallel (one process per N)."""
     print("=" * 70)
     print("ROUSE MODEL MONTE CARLO VALIDATION (PARALLEL)")
     print("surpass-alpha CG Framework")
@@ -163,33 +99,12 @@ def run_all_parallel(policy: ExecutionPolicy, caps: SystemCapabilities,
     results_dir = os.path.join(DELIVERABLE_DIR, "_tmp_results")
     ensure_dir(results_dir)
 
-    # Assign devices per simulation (multi-GPU distribution)
-    device_assignments = assign_devices_for_simulations(
-        len(CHAIN_LENGTHS), caps, policy)
-    for i, N in enumerate(CHAIN_LENGTHS):
-        assigned = device_assignments[i]
-        # VRAM check for GPU assignments
-        if "cuda" in assigned and not use_fast_mode:
-            dev_idx = int(assigned.split(":")[-1]) if ":" in assigned else 0
-            nc = compute_n_chains(N, max(PHI_VALUES))
-            needed_mb = estimate_vram_mb(N, nc)
-            if not check_vram_headroom(dev_idx, needed_mb):
-                print(f"WARNING: GPU {dev_idx} may not have enough VRAM for N={N} "
-                      f"(need ~{needed_mb:.0f}MB). Will use data streaming.")
-        print(f"  N={N} -> device={assigned}")
-
-    # Determine parallelism
-    n_workers = min(len(CHAIN_LENGTHS), caps.n_cpu_cores) if policy.is_parallel else 1
-    print(f"\nLaunching {n_workers} worker process(es)...")
-    pool = mp.Pool(processes=n_workers)
+    # Launch one process per N value
+    print(f"\nLaunching {len(CHAIN_LENGTHS)} parallel worker processes...")
+    pool = mp.Pool(processes=min(len(CHAIN_LENGTHS), mp.cpu_count()))
     async_results = []
-    for i, N in enumerate(CHAIN_LENGTHS):
-        torch_dev = device_assignments[i]
-        ar = pool.apply_async(
-            run_single_N,
-            (N, PHI_VALUES, SEED, results_dir,
-             torch_dev, policy.use_batched_mode, use_fast_mode,
-             eq_sweeps, prod_sweeps))
+    for N in CHAIN_LENGTHS:
+        ar = pool.apply_async(run_single_N, (N, PHI_VALUES, SEED, results_dir))
         async_results.append((N, ar))
 
     # Wait for all to complete
@@ -297,17 +212,4 @@ def run_all_parallel(policy: ExecutionPolicy, caps: SystemCapabilities,
 
 if __name__ == "__main__":
     mp.set_start_method('spawn', force=True)
-
-    def _add_extra_args(parser):
-        parser.add_argument("--no-fast", action="store_true", default=False,
-                            help="Disable numba+numpy fast mode; use PyTorch path.")
-        parser.add_argument("--eq-sweeps", type=int, default=10000,
-                            help="Equilibration sweeps per simulation.")
-        parser.add_argument("--prod-sweeps", type=int, default=10000,
-                            help="Production sweeps per simulation.")
-
-    policy, caps, cli_args = parse_execution_args(extra_args_fn=_add_extra_args)
-    use_fast = not cli_args.no_fast
-    run_all_parallel(policy, caps, use_fast_mode=use_fast,
-                     eq_sweeps=cli_args.eq_sweeps,
-                     prod_sweeps=cli_args.prod_sweeps)
+    run_all_parallel()

@@ -5,10 +5,9 @@ plots (per-state-point, cross-N, cross-phi, compliance heatmap),
 and produce the validation summary.
 
 Usage:
-    python -m rouse_model_python.run_campaign --device {cpu|gpu|mixed} --is_parallel {true|false}
-
-Both --device and --is_parallel are REQUIRED. The program will exit
-with an error if either is missing. There is no default device.
+    python -m rouse_model_python.run_campaign [--device cpu|cuda|gpu]
+                                              [--use_batched_mode]
+                                              [--no-fast]
 """
 
 import sys
@@ -28,24 +27,8 @@ from rouse_model_python.config import (
     PHI_VALUES, CHAIN_LENGTHS, format_phi,
     compute_n_chains, compute_box_size, SIGMA,
 )
-from rouse_model_python.execution_policy import (
-    parse_execution_args, query_system_capabilities,
-    resolve_execution_policy, ExecutionPolicy, SystemCapabilities,
-    assign_devices_for_simulations, check_vram_headroom, estimate_vram_mb,
-)
 from rouse_model_python.simulation import RouseSimulation
 from rouse_model_python.fast_simulation import FastRouseSimulation
-from rouse_model_python.execution_policy import cuda_available as _cuda_available
-
-def _gpu_fast_available():
-    """Check if GPU fast mode (CuPy + CUDA) is available."""
-    if not _cuda_available():
-        return False
-    try:
-        import cupy  # noqa: F401
-        return True
-    except ImportError:
-        return False
 from rouse_model_python.io_utils import (
     write_all_tsvs, generate_all_plots, plot_per_state_point,
     write_validation_summary, write_readme, write_gitattributes,
@@ -55,7 +38,7 @@ from rouse_model_python.io_utils import (
 
 # Deliverable output directory
 DELIVERABLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "rouse_python_validation_deliverable_2026_MAR_26")
+                               "rouse_python_validation_deliverable_v2")
 
 
 def set_all_seeds(seed: int = SEED):
@@ -63,16 +46,31 @@ def set_all_seeds(seed: int = SEED):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.device_count() > 0:
+    if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
 
-def resolve_torch_device(policy: ExecutionPolicy) -> str:
-    """Resolve the torch device string from the execution policy.
-
-    No auto-detection, no fallback. The policy is authoritative.
-    """
-    return policy.torch_device
+def detect_device(requested: str = "auto") -> str:
+    """Detect best available device."""
+    if requested == "gpu":
+        requested = "cuda"
+    if requested == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+            print(f"GPU detected: {torch.cuda.get_device_name(0)}")
+        else:
+            device = "cpu"
+            print("No CUDA available. Using CPU.")
+    elif requested == "cuda":
+        if torch.cuda.is_available():
+            device = "cuda"
+        else:
+            print("CUDA not available. Falling back to CPU.")
+            device = "cpu"
+    else:
+        device = requested
+    print(f"Using device: {device}")
+    return device
 
 
 def create_directory_tree(base_dir: str):
@@ -234,14 +232,14 @@ def print_state_point_table():
         print()
 
 
-def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
+def run_all(device: str = "auto", use_batched_mode: bool = False,
             use_fast_mode: bool = True):
     """Run all 30 state-point simulations, write all outputs.
 
     Args:
-        policy: resolved execution policy from mandatory CLI args
-        caps: system capabilities (GPU count, CPU cores)
-        use_fast_mode: if True, use numba+numpy fast simulation
+        device: torch device string ('cpu', 'cuda', 'gpu', 'auto')
+        use_batched_mode: if True, use batched proposals + batched delta-E
+        use_fast_mode: if True, use numba+numpy fast simulation (default)
     """
     print("=" * 70)
     print("ROUSE MODEL MONTE CARLO VALIDATION")
@@ -249,19 +247,21 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     print(f"30-state-point matrix: {len(CHAIN_LENGTHS)} N x {len(PHI_VALUES)} phi")
     print("=" * 70, flush=True)
 
-    device = resolve_torch_device(policy)
-    use_batched_mode = policy.use_batched_mode
+    device = detect_device(device)
     set_all_seeds(SEED)
 
-    use_gpu_fast = use_fast_mode and _gpu_fast_available()
-    if use_gpu_fast:
-        from rouse_model_python.gpu_simulation import GPURouseSimulation
-        print(f"GPU fast mode: CuPy+CUDA MC sweep (device={device})")
+    if use_batched_mode and device == "cpu":
+        print("WARNING: Batched mode on CPU causes high memory usage. "
+              "Falling back to sequential mode.")
         use_batched_mode = False
-    elif use_fast_mode:
+
+    if device == "cuda" and not use_batched_mode:
+        use_batched_mode = True
+        print("Auto-enabling batched mode for CUDA")
+
+    if use_fast_mode:
         print("Fast mode: numba+numpy MC sweep")
         device = "cpu"
-        use_batched_mode = False
 
     print_state_point_table()
 
@@ -299,9 +299,7 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
             print(f"\n--- [{sim_count}/{total_sims}] N={N}, phi={phi_str}, "
                   f"chains={cfg.n_chains}, box={cfg.box_size:.1f}A ---")
 
-            if use_gpu_fast:
-                sim = GPURouseSimulation(cfg)
-            elif use_fast_mode:
+            if use_fast_mode:
                 sim = FastRouseSimulation(cfg)
             else:
                 sim = RouseSimulation(cfg)
@@ -514,10 +512,23 @@ def verify_outputs(base_dir: str):
 
 
 if __name__ == "__main__":
-    def _add_extra_args(parser):
-        parser.add_argument("--no-fast", action="store_true", default=False,
-                            help="Disable numba+numpy fast mode; use PyTorch path.")
+    device = "auto"
+    batched = False
+    fast = True
 
-    policy, caps, cli_args = parse_execution_args(extra_args_fn=_add_extra_args)
-    use_fast = not cli_args.no_fast
-    run_all(policy, caps, use_fast_mode=use_fast)
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--device" and i + 1 < len(args):
+            device = args[i + 1]
+            i += 2
+        elif args[i] == "--use_batched_mode":
+            batched = True
+            i += 1
+        elif args[i] == "--no-fast":
+            fast = False
+            i += 1
+        else:
+            i += 1
+
+    run_all(device, use_batched_mode=batched, use_fast_mode=fast)

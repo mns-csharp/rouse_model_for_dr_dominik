@@ -689,9 +689,78 @@ DENSITY PROGRESSION (CORE REQUIREMENT -- confirmed by Dr. Dominik Gront):
   Document derivation for every state point. Verify L_box is consistent
   with phi for each entry.
 
-  Parallelization: independent state points are trivially parallel.
-  The framework must support both CPU and GPU parallelization.
-  Assign state points across workers to maximize parallel throughput.
+DEVICE & EXECUTION POLICY (MANDATORY)
+--------------------------------------
+
+PERMITTED SIMULATION MODE:
+  - Segmented mode ONLY. No other simulation mode is permitted.
+
+PERMITTED MC ALGORITHM:
+  - Segmented Multistep MC ONLY. No other MC algorithm is permitted.
+
+REQUIRED ARGUMENTS -- NO DEFAULTS:
+  - Every campaign, simulation, and benchmark entry point MUST require two
+    command-line arguments from the user:
+      --device {cpu|gpu|mixed}     Device target for execution.
+      --is_parallel {true|false}   Whether to use parallel execution strategy.
+  - If either argument is missing, the program MUST raise an error and exit.
+    No automatic detection, no fallback, no default device selection.
+  - There must be NO default device type anywhere in the framework.
+
+SYSTEM CAPABILITY QUERY (AT STARTUP):
+  - Before any simulation begins, the framework MUST query the OS environment
+    and report:
+      (a) Number of GPU devices attached to the system.
+      (b) Number of CPU cores available.
+  - This information is logged at startup for diagnostics and dispatch
+    decisions. It does NOT override the user's --device choice.
+
+EXECUTION POLICY TABLE:
+  Given N = number of beads, with chain-length set N = {n_1, n_2, ..., n_k}:
+
+  --device | --is_parallel | Behaviour
+  ---------|---------------|----------------------------------------------------------
+  cpu      | false         | RUN -- serial CPU, step_size = 1.
+           |               | Baseline mode; safe for debugging / single-chain profiling.
+  cpu      | true          | RUN -- parallel CPU, step_size > 1.
+           |               | CPU thread-level parallelism. Each n_x simulation
+           |               | distributed across available cores.
+  gpu      | false         | WARN -- falls back to serial GPU execution.
+           |               | Emits a warning and continues (useful for debugging or
+           |               | profiling a single run). Pass --force to suppress warning.
+  gpu      | true          | RUN -- parallel GPU, step_size > 1.
+           |               | PyTorch tensors manage internal GPU scheduling; no
+           |               | explicit single-chain threshold needed. For large n_x:
+           |               | use batch processing / chunking / data streaming to stay
+           |               | within VRAM limits. Dispatcher checks available VRAM
+           |               | before assigning a batch.
+  mixed    | false         | WARN -- falls back to CPU-only serial.
+           |               | Warns and runs on CPU. Allows user to validate results
+           |               | before committing to full mixed execution.
+  mixed    | true          | RUN -- hybrid CPU+GPU, optimised dispatch.
+           |               | CPU handles lightweight or memory-constrained chains;
+           |               | GPU handles compute-heavy chains. Workload partitioning
+           |               | is automatic based on n_x size and available VRAM.
+
+SIMULATION DISTRIBUTION POLICY:
+  Condition                        | Policy
+  ---------------------------------|--------------------------------------------------
+  Multiple GPU devices attached    | Distribute individual n_x simulations across
+                                   | devices automatically at startup.
+  A device completes early         | Reassign the next pending simulation to the idle
+                                   | device. Completion defined by MC sweeps (not wall
+                                   | time or convergence criterion).
+  Large n_x / VRAM pressure        | Dispatcher uses batch processing, chunking, or
+                                   | data streaming to avoid OOM. VRAM headroom
+                                   | checked before each batch assignment.
+  Single chain N = {n_1}           | No special handling needed. PyTorch tensor
+                                   | scheduling manages GPU utilisation internally.
+
+NOTE ON step_size VS is_parallel:
+  These are independent parameters. step_size controls MC move granularity;
+  is_parallel controls execution strategy. Validation checks each independently.
+  A run may specify step_size > 1 with is_parallel=false for batched-but-serial
+  execution, or step_size = 1 with is_parallel=true for parallel single-step runs.
 
 FILE RULES:
   - Only TWO persistent working files are permitted:
