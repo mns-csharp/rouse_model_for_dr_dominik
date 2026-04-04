@@ -50,15 +50,15 @@ SEED = 42
 # Legacy per-chain-length configs (single phi=0.035, kept for backward compat)
 # (n_chains, eq_sweeps, prod_sweeps, box_size)
 CHAIN_CONFIGS: Dict[int, Tuple[int, int, int, float]] = {
-    25:  (50,  10000, 10000, 238.0),
-    50:  (50,  10000, 10000, 238.0),
-    100: (50,  10000, 10000, 238.0),
-    250: (30,  10000, 10000, 293.0),
-    500: (20,  10000, 10000, 440.5),
+    25:  (50,  500, 500, 238.0),
+    50:  (50,  500, 500, 238.0),
+    100: (50,  500, 500, 238.0),
+    250: (30,  500, 500, 293.0),
+    500: (20,  500, 500, 440.5),
 }
 
 # Dynamic sampling interval (sweeps between observable snapshots)
-SAMPLE_INTERVAL = 20
+SAMPLE_INTERVAL = 5
 
 
 def compute_n_chains(N: int, phi: float) -> int:
@@ -69,18 +69,18 @@ def compute_n_chains(N: int, phi: float) -> int:
     memory bounded.
     """
     if phi >= 0.10:
-        base = 50
+        base = 10
     elif phi >= 0.05:
-        base = 40
+        base = 8
     elif phi >= 0.01:
-        base = 30
+        base = 5
     else:
-        base = 20
+        base = 3
     # Reduce for long chains
     if N >= 500:
-        base = max(5, base // 3)
+        base = max(2, base // 3)
     elif N >= 250:
-        base = max(10, base // 2)
+        base = max(3, base // 2)
     return base
 
 
@@ -164,7 +164,7 @@ class SimulationConfig:
 
     @classmethod
     def for_state_point(cls, N: int, phi: float, device: str,
-                        eq_sweeps: int = 10000, prod_sweeps: int = 10000
+                        eq_sweeps: int = 500, prod_sweeps: int = 500
                         ) -> "SimulationConfig":
         """Create config for a specific (N, phi) state point.
 

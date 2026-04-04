@@ -1,0 +1,15 @@
+{
+  "parameters": {
+    "N_values": [25, 500, 1000],
+    "n_chains": 100,
+    "eq_sweeps": 5000,
+    "prod_sweeps": 5000,
+    "total_sweeps": 10000
+  },
+  "timings": {
+    "GPU+batched": {
+      "25": 1567.19,
+      "500": 18234.67
+    }
+  }
+}

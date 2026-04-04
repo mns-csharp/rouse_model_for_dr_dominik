@@ -75,7 +75,7 @@ def instrument():
     # Rotation helpers
     mcm.rodrigues_rotation_matrix = timed("rodrigues")(mcm.rodrigues_rotation_matrix)
     mcm.random_so3_matrix = timed("random_so3")(mcm.random_so3_matrix)
-    mcm.apply_rotation_to_beads = timed("apply_rotation")(mcm.apply_rotation_to_beads)
+    mcm.apply_rotation_to_beads_unwrapped = timed("apply_rotation")(mcm.apply_rotation_to_beads_unwrapped)
     mcm._batched_rodrigues = timed("batched_rodrigues")(mcm._batched_rodrigues)
 
 
@@ -181,11 +181,15 @@ def main():
         devices_to_test = ["cpu"]
 
     n_sweeps = 5
+    batched_only = policy.use_batched_mode
     configs = []
-    for N in [25, 250]:
+    for N in [25, 50, 100, 250, 500]:
         for device in devices_to_test:
-            for batched in [False, True]:
-                configs.append((N, device, batched))
+            if batched_only:
+                configs.append((N, device, True))
+            else:
+                for batched in [False, True]:
+                    configs.append((N, device, batched))
 
     results = []
     for N, device, batched in configs:

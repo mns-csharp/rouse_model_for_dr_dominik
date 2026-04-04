@@ -18,6 +18,9 @@ import random
 import shutil
 import numpy as np
 import torch
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing as mp
+import threading
 
 # Add parent directory to path so we can run as script or module
 if __name__ == "__main__":
@@ -32,6 +35,7 @@ from rouse_model_python.execution_policy import (
     parse_execution_args, query_system_capabilities,
     resolve_execution_policy, ExecutionPolicy, SystemCapabilities,
     assign_devices_for_simulations, check_vram_headroom, estimate_vram_mb,
+    partition_mixed_workload, estimate_sim_cost, SimWorkItem,
 )
 from rouse_model_python.simulation import RouseSimulation
 from rouse_model_python.fast_simulation import FastRouseSimulation
@@ -53,9 +57,9 @@ from rouse_model_python.io_utils import (
 )
 
 
-# Deliverable output directory
+# Deliverable output directory (default; override with --output_dir)
 DELIVERABLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                               "rouse_python_validation_deliverable_2026_MAR_26")
+                               "rouse_python_validation_deliverable")
 
 
 def set_all_seeds(seed: int = SEED):
@@ -208,12 +212,15 @@ def write_iteration_log(base_dir: str, entries: list):
             f.write(entry + "\n")
 
 
+_EXCLUDED_SCRIPTS = {'benchmark.py', 'scaling_test.py'}
+
 def copy_python_scripts(base_dir: str, source_dir: str):
     """Copy all Python source files to 06_python_scripts/."""
     dest = os.path.join(base_dir, "06_python_scripts")
     ensure_dir(dest)
     py_files = [f for f in os.listdir(source_dir)
-                if f.endswith('.py') and not f.startswith('__')]
+                if f.endswith('.py') and not f.startswith('__')
+                and f not in _EXCLUDED_SCRIPTS]
     for f in py_files:
         src = os.path.join(source_dir, f)
         dst = os.path.join(dest, f)
@@ -234,15 +241,140 @@ def print_state_point_table():
         print()
 
 
+def _run_sequential(work_items, all_results, log_entries, deliverable_dir):
+    """Run simulations one at a time."""
+    for spec in work_items:
+        phi, N, results = _run_single_sim(spec)
+        all_results[phi][N] = results
+        write_all_tsvs(results, deliverable_dir, N, phi)
+        log_entries.append(
+            f"[ITER 1] [W-N{N}] [DONE] Simulation + TSVs: "
+            f"N={N}, phi={format_phi(phi)}"
+        )
+
+
+def _run_concurrent_threaded(work_items, n_workers, all_results,
+                              log_entries, deliverable_dir):
+    """Run simulations concurrently using threads (good for GPU work)."""
+    _tsv_lock = threading.Lock()
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_run_single_sim, spec): spec
+                   for spec in work_items}
+        for future in as_completed(futures):
+            spec = futures[future]
+            try:
+                phi, N, results = future.result()
+                all_results[phi][N] = results
+                with _tsv_lock:
+                    write_all_tsvs(results, deliverable_dir, N, phi)
+                log_entries.append(
+                    f"[ITER 1] [W-N{N}] [DONE] Simulation + TSVs: "
+                    f"N={N}, phi={format_phi(phi)}, device={spec['device']}"
+                )
+            except Exception as e:
+                print(f"ERROR: N={spec['N']}, phi={spec['phi']}, "
+                      f"device={spec['device']}: {e}", flush=True)
+                raise
+
+
+def _run_cpu_worker(spec):
+    """Multiprocessing worker for CPU simulations."""
+    phi, N, results = _run_single_sim(spec)
+    return (phi, N, results, spec)
+
+
+def _run_concurrent_processes(work_items, n_workers, all_results,
+                               log_entries, deliverable_dir):
+    """Run simulations concurrently using multiprocessing (good for CPU work)."""
+    with mp.Pool(processes=n_workers) as pool:
+        async_results = [pool.apply_async(_run_cpu_worker, (spec,))
+                         for spec in work_items]
+        for ar in async_results:
+            try:
+                phi, N, results, spec = ar.get(timeout=36000)
+                all_results[phi][N] = results
+                write_all_tsvs(results, deliverable_dir, N, phi)
+                log_entries.append(
+                    f"[ITER 1] [W-N{N}] [DONE] Simulation + TSVs: "
+                    f"N={N}, phi={format_phi(phi)}"
+                )
+            except Exception as e:
+                print(f"ERROR in CPU worker: {e}", flush=True)
+                raise
+
+
+def _run_single_sim(sim_spec):
+    """Run a single simulation from a work spec dict. Thread/process worker.
+
+    Args:
+        sim_spec: dict with keys N, phi, device, use_batched_mode, use_fast_mode,
+                  use_gpu_fast, seed, sim_index, total_sims
+
+    Returns:
+        (phi, N, results_dict) tuple
+    """
+    N = sim_spec['N']
+    phi = sim_spec['phi']
+    device = sim_spec['device']
+    use_batched_mode = sim_spec['use_batched_mode']
+    use_fast_mode = sim_spec['use_fast_mode']
+    use_gpu_fast = sim_spec['use_gpu_fast']
+    seed = sim_spec['seed']
+    sim_index = sim_spec['sim_index']
+    total_sims = sim_spec['total_sims']
+    phi_str = format_phi(phi)
+
+    # Per-simulation seed for reproducibility
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    # Set CUDA device for this thread if GPU
+    if 'cuda' in device:
+        dev_idx = int(device.split(':')[-1]) if ':' in device else 0
+        torch.cuda.set_device(dev_idx)
+        torch.cuda.manual_seed(seed)
+        try:
+            import cupy as cp
+            cp.cuda.Device(dev_idx).use()
+        except ImportError:
+            pass
+
+    cfg = SimulationConfig.for_state_point(N, phi, device=device)
+    cfg.use_batched_mode = use_batched_mode
+    cfg.seed = seed
+
+    print(f"\n--- [{sim_index}/{total_sims}] N={N}, phi={phi_str}, "
+          f"chains={cfg.n_chains}, box={cfg.box_size:.1f}A, device={device} ---",
+          flush=True)
+
+    if use_gpu_fast:
+        from rouse_model_python.gpu_simulation import GPURouseSimulation
+        sim = GPURouseSimulation(cfg)
+    elif use_fast_mode:
+        sim = FastRouseSimulation(cfg)
+    else:
+        sim = RouseSimulation(cfg)
+
+    results = sim.run()
+    return (phi, N, results)
+
+
 def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
-            use_fast_mode: bool = True):
+            use_fast_mode: bool = True, output_dir: str = None):
     """Run all 30 state-point simulations, write all outputs.
+
+    Uses all available GPUs concurrently when --device gpu.
+    Uses multiprocessing for CPU parallelism when --device cpu.
+    Uses hybrid GPU+CPU dispatch when --device mixed.
 
     Args:
         policy: resolved execution policy from mandatory CLI args
         caps: system capabilities (GPU count, CPU cores)
         use_fast_mode: if True, use numba+numpy fast simulation
+        output_dir: override output directory (default: DELIVERABLE_DIR)
     """
+    deliverable_dir = output_dir if output_dir is not None else DELIVERABLE_DIR
     print("=" * 70)
     print("ROUSE MODEL MONTE CARLO VALIDATION")
     print("surpass-alpha CG Framework")
@@ -253,9 +385,9 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     use_batched_mode = policy.use_batched_mode
     set_all_seeds(SEED)
 
-    use_gpu_fast = use_fast_mode and _gpu_fast_available()
+    use_gpu_fast = (use_fast_mode and _gpu_fast_available()
+                    and policy.device in ("gpu", "mixed"))
     if use_gpu_fast:
-        from rouse_model_python.gpu_simulation import GPURouseSimulation
         print(f"GPU fast mode: CuPy+CUDA MC sweep (device={device})")
         use_batched_mode = False
     elif use_fast_mode:
@@ -274,9 +406,9 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     # --- PHASE 0: Setup ---
     log_entries.append("[ITER 1] [TIMEKEEPER] [START] Beginning iteration 1.")
 
-    create_directory_tree(DELIVERABLE_DIR)
+    create_directory_tree(deliverable_dir)
     done_reqs.update({"REQ-06", "REQ-07", "REQ-70"})
-    write_requirements_list(DELIVERABLE_DIR, done_reqs)
+    write_requirements_list(deliverable_dir, done_reqs)
     log_entries.append("[ITER 1] [WORKER-SETUP] [DONE] Directory tree created, requirements_list.md written")
 
     # --- PHASE 1: Run all 30 state-point simulations ---
@@ -284,39 +416,117 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     print("RUNNING 30 STATE-POINT SIMULATIONS")
     print("=" * 70)
 
+    # Build work items with device assignments
     total_sims = len(CHAIN_LENGTHS) * len(PHI_VALUES)
-    sim_count = 0
+    work_items = []
+    sim_index = 0
+
+    # For mixed mode: build SimWorkItems for cost-aware partitioning
+    if policy.device == "mixed" and caps.n_gpus > 0 and not (use_fast_mode and not use_gpu_fast):
+        sim_work_items = []
+        sim_metadata = []  # parallel list of (phi, sim_index) for each item
+        for phi in PHI_VALUES:
+            all_results[phi] = {}
+            for N in CHAIN_LENGTHS:
+                sim_index += 1
+                n_ch = compute_n_chains(N, phi)
+                total_sweeps = 500 + 500  # eq_sweeps + prod_sweeps
+                sim_work_items.append(SimWorkItem(
+                    index=sim_index - 1,
+                    N=N,
+                    n_chains=n_ch,
+                    sweeps=total_sweeps,
+                ))
+                sim_metadata.append((phi, sim_index))
+
+        partition_mixed_workload(sim_work_items, caps)
+
+        for sw, (phi, sidx) in zip(sim_work_items, sim_metadata):
+            dev = sw.device
+            work_items.append({
+                'N': sw.N,
+                'phi': phi,
+                'device': dev,
+                'use_batched_mode': use_batched_mode,
+                'use_fast_mode': use_fast_mode,
+                'use_gpu_fast': use_gpu_fast and 'cuda' in dev,
+                'seed': SEED + sidx * 137,
+                'sim_index': sidx,
+                'total_sims': total_sims,
+            })
+    else:
+        for phi in PHI_VALUES:
+            all_results[phi] = {}
+            for N in CHAIN_LENGTHS:
+                sim_index += 1
+                # Assign device: round-robin across GPUs for gpu mode
+                if policy.device == "gpu" and caps.n_gpus > 1:
+                    dev = f"cuda:{(sim_index - 1) % caps.n_gpus}"
+                else:
+                    dev = device
+
+                # For CPU fast mode, always use cpu
+                if use_fast_mode and not use_gpu_fast:
+                    dev = "cpu"
+
+                work_items.append({
+                    'N': N,
+                    'phi': phi,
+                    'device': dev,
+                    'use_batched_mode': use_batched_mode,
+                    'use_fast_mode': use_fast_mode,
+                    'use_gpu_fast': use_gpu_fast and 'cuda' in dev,
+                    'seed': SEED + sim_index * 137,
+                    'sim_index': sim_index,
+                    'total_sims': total_sims,
+                })
+
+    # Print device assignment summary
+    dev_counts = {}
+    dev_costs = {}
+    for item in work_items:
+        d = item['device']
+        dev_counts[d] = dev_counts.get(d, 0) + 1
+        n_ch = compute_n_chains(item['N'], item['phi'])
+        cost = estimate_sim_cost(item['N'], n_ch, 20000)
+        dev_costs[d] = dev_costs.get(d, 0.0) + cost
+    print(f"Device assignments: {dev_counts}")
+    if len(dev_costs) > 1:
+        total_cost = sum(dev_costs.values())
+        for d, c in sorted(dev_costs.items()):
+            print(f"  {d}: {dev_counts[d]} sims, {c/total_cost*100:.1f}% of total cost")
+
+    # Determine concurrency
+    if policy.device == "gpu" and caps.n_gpus > 1 and policy.is_parallel:
+        # Multi-GPU: use threads (GPU work releases GIL via CUDA/CuPy)
+        n_workers = caps.n_gpus
+        print(f"Using {n_workers} GPU workers (ThreadPoolExecutor)")
+        _run_concurrent_threaded(work_items, n_workers, all_results,
+                                 log_entries, deliverable_dir)
+    elif policy.device == "cpu" and policy.is_parallel:
+        # CPU parallel: use multiprocessing
+        n_workers = min(len(CHAIN_LENGTHS), caps.n_cpu_cores)
+        print(f"Using {n_workers} CPU workers (multiprocessing)")
+        _run_concurrent_processes(work_items, n_workers, all_results,
+                                  log_entries, deliverable_dir)
+    elif policy.device == "mixed" and policy.is_parallel:
+        # Mixed: GPU threads + CPU threads concurrently
+        gpu_items = [w for w in work_items if 'cuda' in w['device']]
+        cpu_items = [w for w in work_items if w['device'] == 'cpu']
+        n_gpu_workers = max(1, caps.n_gpus)
+        n_cpu_workers = min(len(cpu_items), max(1, caps.n_cpu_cores // 2))
+        n_workers = n_gpu_workers + n_cpu_workers
+        print(f"Using {n_gpu_workers} GPU + {n_cpu_workers} CPU workers "
+              f"({len(gpu_items)} GPU sims + {len(cpu_items)} CPU sims)")
+        _run_concurrent_threaded(work_items, n_workers, all_results,
+                                 log_entries, deliverable_dir)
+    else:
+        # Serial fallback
+        print("Running simulations sequentially")
+        _run_sequential(work_items, all_results, log_entries, deliverable_dir)
 
     for phi in PHI_VALUES:
-        all_results[phi] = {}
         phi_str = format_phi(phi)
-
-        for N in CHAIN_LENGTHS:
-            sim_count += 1
-            cfg = SimulationConfig.for_state_point(N, phi, device=device)
-            cfg.use_batched_mode = use_batched_mode
-
-            print(f"\n--- [{sim_count}/{total_sims}] N={N}, phi={phi_str}, "
-                  f"chains={cfg.n_chains}, box={cfg.box_size:.1f}A ---")
-
-            if use_gpu_fast:
-                sim = GPURouseSimulation(cfg)
-            elif use_fast_mode:
-                sim = FastRouseSimulation(cfg)
-            else:
-                sim = RouseSimulation(cfg)
-
-            results = sim.run()
-            all_results[phi][N] = results
-
-            # Write TSV files immediately
-            write_all_tsvs(results, DELIVERABLE_DIR, N, phi)
-
-            log_entries.append(
-                f"[ITER 1] [W-N{N}] [DONE] Simulation + TSVs: "
-                f"N={N}, phi={phi_str}"
-            )
-
         log_entries.append(
             f"[ITER 1] [SUPERVISOR] All N complete for phi={phi_str}"
         )
@@ -331,7 +541,7 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     print("GENERATING PLOTS AND ANALYSIS")
     print("=" * 70)
 
-    generate_all_plots(all_results, DELIVERABLE_DIR)
+    generate_all_plots(all_results, deliverable_dir)
 
     done_reqs.update({
         "REQ-42", "REQ-43", "REQ-44", "REQ-46",
@@ -345,7 +555,7 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     print("VALIDATION SUMMARY")
     print("=" * 70)
 
-    summary = write_validation_summary(all_results, DELIVERABLE_DIR)
+    summary = write_validation_summary(all_results, deliverable_dir)
     done_reqs.add("REQ-69")
 
     # Print dilute-limit results
@@ -367,14 +577,14 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     log_entries.append("[ITER 1] [WORKER-ANALYSIS] [DONE] Validation summary written")
 
     # --- PHASE 4: Report files ---
-    write_readme(all_results, summary, DELIVERABLE_DIR)
+    write_readme(all_results, summary, deliverable_dir)
     done_reqs.add("REQ-69")
     log_entries.append("[ITER 1] [DONE] README.md written")
 
-    write_gitattributes(DELIVERABLE_DIR)
+    write_gitattributes(deliverable_dir)
     log_entries.append("[ITER 1] [DONE] .gitattributes written")
 
-    copy_python_scripts(DELIVERABLE_DIR, source_dir)
+    copy_python_scripts(deliverable_dir, source_dir)
     log_entries.append("[ITER 1] [DONE] Python scripts copied to 06_python_scripts/")
 
     # Mark remaining infrastructure requirements as done
@@ -389,14 +599,14 @@ def run_all(policy: ExecutionPolicy, caps: SystemCapabilities,
     log_entries.append("[ITER 1] [SENTINEL] [REPORT] No unauthorized files. No temperature parameter violations.")
     log_entries.append("[ITER 1] [TIMEKEEPER] [COMPLETE] All 71 requirements done. No further iteration.")
 
-    write_requirements_list(DELIVERABLE_DIR, done_reqs)
-    write_iteration_log(DELIVERABLE_DIR, log_entries)
+    write_requirements_list(deliverable_dir, done_reqs)
+    write_iteration_log(deliverable_dir, log_entries)
 
     total_time = time.time() - total_start
     print(f"\nTotal wall time: {total_time:.1f}s")
-    print(f"All outputs written to: {DELIVERABLE_DIR}")
+    print(f"All outputs written to: {deliverable_dir}")
 
-    verify_outputs(DELIVERABLE_DIR)
+    verify_outputs(deliverable_dir)
 
 
 def verify_outputs(base_dir: str):
@@ -517,7 +727,9 @@ if __name__ == "__main__":
     def _add_extra_args(parser):
         parser.add_argument("--no-fast", action="store_true", default=False,
                             help="Disable numba+numpy fast mode; use PyTorch path.")
+        parser.add_argument("--output_dir", type=str, default=None,
+                            help="Override output directory for deliverables.")
 
     policy, caps, cli_args = parse_execution_args(extra_args_fn=_add_extra_args)
     use_fast = not cli_args.no_fast
-    run_all(policy, caps, use_fast_mode=use_fast)
+    run_all(policy, caps, use_fast_mode=use_fast, output_dir=cli_args.output_dir)

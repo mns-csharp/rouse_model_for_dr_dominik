@@ -255,10 +255,14 @@ def propose_tail_move(state: ChainState, chain_idx: int, seg_start: int,
 
     old_pos = positions[move_start:move_end].clone()
 
-    # Sequential unwrap from anchor along chain backbone, then rotate
-    # For N-terminal: anchor (a_idx) is after the segment — unwrap backward
-    # For C-terminal: anchor (a_idx) is before the segment — unwrap forward
-    unwrapped = ns.unwrap_chain_from_anchor(old_pos, pos_a)
+    # Sequential unwrap from anchor along chain backbone, then rotate.
+    # N-terminal: anchor is after the segment → unwrap in reverse chain
+    #   order so the first unwrapped bead is adjacent to the anchor.
+    # C-terminal: anchor is before the segment → unwrap in forward order.
+    if is_n_terminal:
+        unwrapped = ns.unwrap_chain_from_anchor(old_pos.flip(0), pos_a).flip(0)
+    else:
+        unwrapped = ns.unwrap_chain_from_anchor(old_pos, pos_a)
     new_pos = apply_rotation_to_beads_unwrapped(unwrapped, pos_a, R, ns)
 
     mtype = 'n_tail' if is_n_terminal else 'c_tail'
@@ -885,16 +889,46 @@ def propose_batch_segment_moves_fused(state: ChainState,
               - 1.0) * cfg.max_angle_hinge
     R_batch = _batched_rodrigues(axes, angles, valid_mask)
 
-    # Phase 4: Gather old positions + apply batched rotation
+    # Phase 4: Gather old positions + sequential chain unwrap + rotate
+    #
+    # CRITICAL: Each bead must be unwrapped sequentially along the chain
+    # backbone, NOT independently via per-bead MIC from the anchor.
+    # Per-bead MIC can snap adjacent beads to different PBC images when
+    # the chain wraps around a small box, destroying interior bond lengths
+    # after rotation.
+    #
+    # For hinge/C-tail: anchor is before the segment → forward unwrap
+    # For N-tail: anchor is after the segment → reverse unwrap then flip
     max_moved = max(m[4] - m[3] for m in meta)
 
     old_batch = torch.zeros(B, max_moved, 3, dtype=dtype, device=device)
-    for bi, (ci, _, _, ms, me, _) in enumerate(meta):
+    delta = torch.zeros(B, max_moved, 3, dtype=dtype, device=device)
+
+    for bi, (ci, a_idx, _, ms, me, mtype) in enumerate(meta):
         nm = me - ms
         old_batch[bi, :nm] = state.positions[ci, ms:me]
 
-    delta = old_batch - pos_a[:, None, :]
-    delta = delta - box * torch.round(delta * inv_box)
+        if nm == 0:
+            continue
+
+        # Get anchor position (already computed as pos_a[bi])
+        anchor = pos_a[bi]
+
+        if mtype == 'n_tail':
+            # Anchor is after the segment: unwrap backward (last bead first)
+            beads = state.positions[ci, ms:me].flip(0)
+        else:
+            # Anchor is before the segment: unwrap forward
+            beads = state.positions[ci, ms:me]
+
+        # Sequential unwrap: bead 0 from anchor, bead k from bead k-1
+        uw = ns.unwrap_chain_from_anchor(beads, anchor)
+
+        if mtype == 'n_tail':
+            uw = uw.flip(0)  # restore original chain order
+
+        delta[bi, :nm] = uw - anchor.unsqueeze(0)
+
     rotated = torch.bmm(delta, R_batch.transpose(1, 2))
     new_batch = pos_a[:, None, :] + rotated
     new_batch = ns.wrap(new_batch)

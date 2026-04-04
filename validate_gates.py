@@ -43,7 +43,7 @@ from rouse_model_python.observables import StaticObservables, DynamicAccumulator
 
 EVIDENCE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "rouse_python_validation_deliverable_2026_MAR_26", "gate_evidence")
+    "rouse_python_validation_deliverable", "gate_evidence")
 
 os.makedirs(EVIDENCE_DIR, exist_ok=True)
 
@@ -1414,7 +1414,7 @@ def _get_data_dir():
     """Get the deliverables base directory."""
     return os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "rouse_python_validation_deliverable_2026_MAR_26")
+        "rouse_python_validation_deliverable")
 
 
 def gate_39():

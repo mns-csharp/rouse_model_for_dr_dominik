@@ -221,6 +221,14 @@ def add_execution_args(parser: argparse.ArgumentParser) -> None:
         help="Whether to use parallel execution strategy: true or false. REQUIRED.",
     )
     parser.add_argument(
+        "--batched",
+        type=str,
+        required=False,
+        choices=["true", "false"],
+        default=None,
+        help="Override batched mode: true or false. If omitted, auto-resolved from device/parallel.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         default=False,
@@ -258,6 +266,11 @@ def parse_execution_args(argv: Optional[List[str]] = None,
     is_parallel = args.is_parallel.lower() == "true"
     policy = resolve_execution_policy(args.device, is_parallel, caps,
                                       force=args.force)
+
+    # Apply --batched override if provided
+    if args.batched is not None:
+        policy.use_batched_mode = args.batched.lower() == "true"
+
     print("\nExecution policy:")
     print(policy.report())
 
@@ -268,6 +281,126 @@ def parse_execution_args(argv: Optional[List[str]] = None,
 # Multi-GPU simulation distribution
 # ---------------------------------------------------------------------------
 
+@dataclass
+class SimWorkItem:
+    """Describes a simulation for cost-aware device assignment."""
+    index: int          # position in the work list (for stable ordering)
+    N: int              # beads per chain
+    n_chains: int       # number of chains
+    sweeps: int         # total sweeps (eq + prod)
+    cost: float = 0.0   # estimated compute cost (filled by estimate_sim_cost)
+    device: str = ""    # assigned device (filled by partition_mixed_workload)
+
+
+# Empirical GPU-vs-CPU speed ratio.  GPU kernel launch overhead means tiny
+# workloads run *slower* on GPU than CPU; large workloads run much faster.
+# These ratios were measured on A100 / Xeon Gold and are intentionally
+# conservative so that borderline cases stay on CPU.
+_GPU_SPEEDUP_FACTOR = 8.0   # GPU is ~8x faster for large workloads
+_GPU_OVERHEAD_BEADS = 500    # below this total-bead count, GPU overhead dominates
+
+
+def estimate_sim_cost(N: int, n_chains: int, sweeps: int) -> float:
+    """Estimate relative compute cost for a simulation.
+
+    Cost scales as N^2 * n_chains * sweeps.  The N^2 term reflects pairwise
+    bead interactions within the energy kernel (cell-list bounded, but still
+    quadratic in segment size ≈ N for short chains and grows with N).
+    """
+    return float(N * N) * n_chains * sweeps
+
+
+def partition_mixed_workload(
+    work_items: List[SimWorkItem],
+    caps: SystemCapabilities,
+    gpu_speedup: float = _GPU_SPEEDUP_FACTOR,
+    gpu_overhead_beads: int = _GPU_OVERHEAD_BEADS,
+) -> List[SimWorkItem]:
+    """Cost-aware GPU/CPU partitioning for --device=mixed.
+
+    Strategy:
+    1. Compute a cost estimate for each simulation (N^2 * n_chains * sweeps).
+    2. Exclude tiny workloads (total beads < gpu_overhead_beads) — they always
+       go to CPU because GPU kernel launch overhead exceeds any speedup.
+    3. Check VRAM: simulations whose estimated VRAM exceeds available headroom
+       are forced to CPU.
+    4. Greedily assign the remaining simulations to GPU or CPU to equalize
+       total *effective* work on each side.  GPU work is divided by
+       gpu_speedup to reflect wall-clock time rather than raw cost.
+
+    Returns the same list with .device populated on every item.
+    """
+    if caps.n_gpus == 0:
+        for w in work_items:
+            w.device = "cpu"
+        return work_items
+
+    # Step 1: fill cost estimates
+    for w in work_items:
+        w.cost = estimate_sim_cost(w.N, w.n_chains, w.sweeps)
+
+    # Step 2: classify items that *must* go to CPU
+    gpu_eligible: List[SimWorkItem] = []
+    cpu_forced: List[SimWorkItem] = []
+
+    # Query per-GPU free VRAM once
+    gpu_free_mb: List[float] = []
+    for i in range(caps.n_gpus):
+        try:
+            free, _ = torch.cuda.mem_get_info(i)
+            gpu_free_mb.append(free / (1024 ** 2))
+        except Exception:
+            gpu_free_mb.append(0.0)
+    # Use the minimum across GPUs as the per-sim budget (conservative)
+    min_free_mb = min(gpu_free_mb) if gpu_free_mb else 0.0
+
+    for w in work_items:
+        total_beads = w.N * w.n_chains
+        vram_needed = estimate_vram_mb(w.N, w.n_chains)
+        if total_beads < gpu_overhead_beads:
+            cpu_forced.append(w)
+        elif vram_needed > min_free_mb:
+            cpu_forced.append(w)
+        else:
+            gpu_eligible.append(w)
+
+    # If nothing is GPU-eligible, everything goes to CPU
+    if not gpu_eligible:
+        for w in work_items:
+            w.device = "cpu"
+        return work_items
+
+    # Step 3: greedy balanced partition
+    # Sort eligible items by cost descending (largest-first-fit)
+    gpu_eligible.sort(key=lambda w: w.cost, reverse=True)
+
+    gpu_time = 0.0   # effective wall-clock units on GPU
+    cpu_time = sum(w.cost for w in cpu_forced)  # CPU already has forced items
+
+    gpu_assigned: List[SimWorkItem] = []
+    cpu_assigned: List[SimWorkItem] = list(cpu_forced)
+
+    for w in gpu_eligible:
+        gpu_wall = w.cost / gpu_speedup
+        # Assign to whichever side has less accumulated wall-clock time
+        if gpu_time + gpu_wall <= cpu_time + w.cost:
+            gpu_assigned.append(w)
+            gpu_time += gpu_wall
+        else:
+            cpu_assigned.append(w)
+            cpu_time += w.cost
+
+    # Step 4: assign device strings
+    for w in cpu_assigned:
+        w.device = "cpu"
+
+    # Round-robin GPU assignments across available GPUs
+    for i, w in enumerate(gpu_assigned):
+        w.device = f"cuda:{i % caps.n_gpus}"
+
+    return work_items
+
+
 def assign_devices_for_simulations(n_simulations: int,
                                    caps: SystemCapabilities,
                                    policy: ExecutionPolicy) -> List[str]:
@@ -275,14 +408,17 @@ def assign_devices_for_simulations(n_simulations: int,
 
     Policy:
     - If device=gpu and multiple GPUs: round-robin across GPUs
-    - If device=mixed: large-N sims go to GPU, small-N to CPU
+    - If device=mixed: use partition_mixed_workload() for cost-aware dispatch
     - If device=cpu or single GPU: all get the same device
+
+    Note: for mixed mode with full cost-aware partitioning, prefer calling
+    partition_mixed_workload() directly with SimWorkItem details.  This
+    function provides a simpler interface when per-sim details aren't available.
     """
     if policy.device == "gpu" and caps.n_gpus > 1:
         # Round-robin across available GPUs
         return [f"cuda:{i % caps.n_gpus}" for i in range(n_simulations)]
     elif policy.device == "mixed" and caps.n_gpus > 0:
-        # GPU for all if parallel, dispatch logic can be refined per-N
         return [f"cuda:{i % max(1, caps.n_gpus)}" for i in range(n_simulations)]
     else:
         return [policy.torch_device] * n_simulations

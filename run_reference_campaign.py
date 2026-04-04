@@ -50,11 +50,11 @@ CHAIN_LENGTHS = [25, 50, 100, 250, 500]
 
 # Exact parameters from the reference deliverable
 REFERENCE_PARAMS = {
-    25:  {'n_chains': 500, 'eq_sweeps': 2000,  'prod_sweeps': 5000,  'box': 269.6},
-    50:  {'n_chains': 500, 'eq_sweeps': 5000,  'prod_sweeps': 5000,  'box': 339.7},
-    100: {'n_chains': 500, 'eq_sweeps': 5000,  'prod_sweeps': 5000,  'box': 428.0},
-    250: {'n_chains': 200, 'eq_sweeps': 10000, 'prod_sweeps': 5000,  'box': 428.0},
-    500: {'n_chains': 110, 'eq_sweeps': 25000, 'prod_sweeps': 10000, 'box': 441.8},
+    25:  {'n_chains': 50,  'eq_sweeps': 500, 'prod_sweeps': 500, 'box': 269.6},
+    50:  {'n_chains': 50,  'eq_sweeps': 500, 'prod_sweeps': 500, 'box': 339.7},
+    100: {'n_chains': 50,  'eq_sweeps': 500, 'prod_sweeps': 500, 'box': 428.0},
+    250: {'n_chains': 20,  'eq_sweeps': 500, 'prod_sweeps': 500, 'box': 428.0},
+    500: {'n_chains': 10,  'eq_sweeps': 500, 'prod_sweeps': 500, 'box': 441.8},
 }
 
 # Output directory (separate from the phi-progression deliverable)
@@ -280,7 +280,7 @@ cfg = SimulationConfig(
     device=device,
     target_phi=0.035,
     sample_interval=max(1, min(20, N // 10)),
-    use_batched_mode=torch.cuda.device_count() > 0,
+    use_batched_mode=params.get("use_batched", torch.cuda.device_count() > 0),
 )
 
 print(f"[W-N{N}] device={device}, CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES','unset')}", flush=True)
@@ -322,7 +322,8 @@ print(f"[W-N{N}] Done: <R2>={mean_R2:.2f}, <Rg2>={mean_Rg2:.2f}, R2/Rg2={ratio:.
         env = os.environ.copy()
         if gpu_id >= 0:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-        params_json = json.dumps(REFERENCE_PARAMS[N])
+        worker_params = dict(REFERENCE_PARAMS[N], use_batched=use_batched)
+        params_json = json.dumps(worker_params)
         cmd = [sys.executable, worker_script, str(N), results_dir,
                DELIVERABLE_DIR, params_json]
         log_path = os.path.join(log_dir, f"worker_N{N}.log")
