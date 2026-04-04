@@ -285,7 +285,7 @@ def gate_07():
         lines.append("")
         lines.append("GPU batch kernels defined in energy.py:")
         lines.append("  _batched_delta_e_kernel_impl() - FP32 4D broadcast")
-        lines.append("  _batched_emm_kernel_impl() - FP32 5D broadcast for rank-1")
+        lines.append("  _batched_emm_correction_kernel_impl() - fused correction kernel with sparse pairs")
         lines.append("  Both use torch.compile for kernel fusion")
         lines.append("")
         lines.append("Device .to(device) calls confirmed in:")
@@ -1242,7 +1242,7 @@ def gate_35():
         f"Compile mode used: {energy_mod._COMPILE_MODE}",
         "Compiled kernels:",
         "  _batched_delta_e_kernel (FP32 4D broadcast)",
-        "  _batched_emm_kernel (FP32 5D broadcast)",
+        "  _batched_emm_correction_kernel (fused correction, sparse pairs)",
         "",
         "Both kernels use 'default' compile mode (no CUDA graphs)",
         "to handle dynamic MC shapes. The compiled version produces",

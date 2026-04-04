@@ -8,7 +8,7 @@ Kernel inventory:
   - segment_proposal_kernel: generate B segment move proposals in parallel
   - pivot_proposal_kernel: generate n_chains pivot proposals in parallel
   - delta_e_kernel: compute overlap counts for B proposals vs cell list
-  - emm_kernel: compute 4 pairwise energy matrices [B, B] for rank-1
+  - emm_correction_kernel: compute fused rank-1 correction matrix [B, B]
   - apply_moves_kernel: scatter accepted proposals into position array
 """
 
@@ -578,25 +578,24 @@ extern "C" __global__ void delta_e_kernel(
 
 _EMM_SRC = _COMMON_HEADER + r"""
 /*
- * Emm kernel: one thread block per (i,j) pair (upper triangle).
+ * Fused EMM correction kernel: one thread block per (i,j) pair.
  *
- * Each block computes 4 overlap counts between proposals i and j:
- *   E00 = overlaps(old_i, old_j)
- *   E01 = overlaps(old_i, new_j)
- *   E10 = overlaps(new_i, old_j)
- *   E11 = overlaps(new_i, new_j)
+ * Computes the rank-1 correction directly:
+ *   correction[i,j] = (E11 - E01) - (E10 - E00)
  *
- * Grid: B*(B-1)/2 blocks. Block index maps to (i,j) pair.
+ * Outputs a single [B, B] correction matrix instead of four separate
+ * matrices, reducing GPU memory by 4× and D2H transfer by 4×.
+ * All 4 distance checks are done in a single pass per bead pair,
+ * loading positions once and accumulating the correction count.
+ *
+ * Grid: n_pairs blocks (sparse, filtered by bounding-sphere proximity).
  * Block dim: 256 threads, cooperative over bead pairs.
  */
-extern "C" __global__ void emm_kernel(
+extern "C" __global__ void emm_correction_kernel(
     const float* __restrict__ old_pos,    // [B, max_moved, 3]
     const float* __restrict__ new_pos,    // [B, max_moved, 3]
     const int* __restrict__ n_moved,      // [B]
-    float* __restrict__ emm00,            // [B, B]
-    float* __restrict__ emm01,            // [B, B]
-    float* __restrict__ emm10,            // [B, B]
-    float* __restrict__ emm11,            // [B, B]
+    float* __restrict__ correction,       // [B, B] output correction matrix
     const int* __restrict__ pair_i,       // [n_pairs] first index
     const int* __restrict__ pair_j,       // [n_pairs] second index
     float box, float inv_box,
@@ -613,10 +612,7 @@ extern "C" __global__ void emm_kernel(
 
     if (nm_i == 0 || nm_j == 0) {
         if (threadIdx.x == 0) {
-            emm00[pi * B + pj] = 0.0f;
-            emm01[pi * B + pj] = 0.0f;
-            emm10[pi * B + pj] = 0.0f;
-            emm11[pi * B + pj] = 0.0f;
+            correction[pi * B + pj] = 0.0f;
         }
         return;
     }
@@ -626,11 +622,10 @@ extern "C" __global__ void emm_kernel(
     const float* old_j = old_pos + pj * max_moved * 3;
     const float* new_j = new_pos + pj * max_moved * 3;
 
-    // Total bead pairs to check
     int total_pairs = nm_i * nm_j;
 
-    // Each thread handles a subset of bead pairs
-    int c00 = 0, c01 = 0, c10 = 0, c11 = 0;
+    // Accumulate correction directly: +1 for E11/E00 overlaps, -1 for E01/E10
+    int corr_count = 0;
 
     for (int idx = threadIdx.x; idx < total_pairs; idx += blockDim.x) {
         int mi = idx / nm_j;
@@ -643,58 +638,49 @@ extern "C" __global__ void emm_kernel(
 
         float dx, dy, dz, r2;
 
-        // E00: old_i vs old_j
+        // E00: old_i vs old_j → +1 (part of correction formula)
         dx = mic_wrap(ojx - oix, box, inv_box);
         dy = mic_wrap(ojy - oiy, box, inv_box);
         dz = mic_wrap(ojz - oiz, box, inv_box);
         r2 = dx*dx + dy*dy + dz*dz;
-        if (r2 < r_rep_sq) c00++;
+        if (r2 < r_rep_sq) corr_count++;
 
-        // E01: old_i vs new_j
+        // E01: old_i vs new_j → -1
         dx = mic_wrap(njx - oix, box, inv_box);
         dy = mic_wrap(njy - oiy, box, inv_box);
         dz = mic_wrap(njz - oiz, box, inv_box);
         r2 = dx*dx + dy*dy + dz*dz;
-        if (r2 < r_rep_sq) c01++;
+        if (r2 < r_rep_sq) corr_count--;
 
-        // E10: new_i vs old_j
+        // E10: new_i vs old_j → -1
         dx = mic_wrap(ojx - nix, box, inv_box);
         dy = mic_wrap(ojy - niy, box, inv_box);
         dz = mic_wrap(ojz - niz, box, inv_box);
         r2 = dx*dx + dy*dy + dz*dz;
-        if (r2 < r_rep_sq) c10++;
+        if (r2 < r_rep_sq) corr_count--;
 
-        // E11: new_i vs new_j
+        // E11: new_i vs new_j → +1
         dx = mic_wrap(njx - nix, box, inv_box);
         dy = mic_wrap(njy - niy, box, inv_box);
         dz = mic_wrap(njz - niz, box, inv_box);
         r2 = dx*dx + dy*dy + dz*dz;
-        if (r2 < r_rep_sq) c11++;
+        if (r2 < r_rep_sq) corr_count++;
     }
 
-    // Block reduction
-    __shared__ int s00[256], s01[256], s10[256], s11[256];
-    s00[threadIdx.x] = c00;
-    s01[threadIdx.x] = c01;
-    s10[threadIdx.x] = c10;
-    s11[threadIdx.x] = c11;
+    // Block reduction on correction count
+    __shared__ int s_corr[256];
+    s_corr[threadIdx.x] = corr_count;
     __syncthreads();
 
     for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
         if (threadIdx.x < stride) {
-            s00[threadIdx.x] += s00[threadIdx.x + stride];
-            s01[threadIdx.x] += s01[threadIdx.x + stride];
-            s10[threadIdx.x] += s10[threadIdx.x + stride];
-            s11[threadIdx.x] += s11[threadIdx.x + stride];
+            s_corr[threadIdx.x] += s_corr[threadIdx.x + stride];
         }
         __syncthreads();
     }
 
     if (threadIdx.x == 0) {
-        emm00[pi * B + pj] = (float)s00[0] * rep_e;
-        emm01[pi * B + pj] = (float)s01[0] * rep_e;
-        emm10[pi * B + pj] = (float)s10[0] * rep_e;
-        emm11[pi * B + pj] = (float)s11[0] * rep_e;
+        correction[pi * B + pj] = (float)s_corr[0] * rep_e;
     }
 }
 """
@@ -775,8 +761,8 @@ class GPUKernelManager:
             _PIVOT_PROPOSAL_SRC, 'pivot_proposal_kernel')
         self._kernels['delta_e'] = cp.RawKernel(
             _DELTA_E_SRC, 'delta_e_kernel')
-        self._kernels['emm'] = cp.RawKernel(
-            _EMM_SRC, 'emm_kernel')
+        self._kernels['emm_correction'] = cp.RawKernel(
+            _EMM_SRC, 'emm_correction_kernel')
         self._kernels['apply_moves'] = cp.RawKernel(
             _APPLY_MOVES_SRC, 'apply_moves_kernel')
         self._kernels['copy_f64_to_f32'] = cp.RawKernel(

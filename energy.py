@@ -70,33 +70,73 @@ def _batched_delta_e_kernel_impl(pos_f32, old_batch, new_batch,
     return delta_v
 
 
-def _batched_emm_kernel_impl(old_batch, new_batch, box, inv_box, r_rep_sq, rep_e):
+def _batched_emm_correction_kernel_impl(old_batch, new_batch,
+                                         pair_i, pair_j,
+                                         box, inv_box, r_rep_sq, rep_e, B):
     """
-    Compute all 4 pairwise segment energy matrices E00, E01, E10, E11.
-    [B, B, max_moved, max_moved, 3] → [B, B] count matrices.
-    """
-    def _pairwise(pos_i, pos_j):
-        d = pos_i[:, None, :, None, :] - pos_j[None, :, None, :, :]
-        d = d - box * torch.round(d * inv_box)
-        r2 = (d * d).sum(dim=4)
-        return (r2 < r_rep_sq).sum(dim=(2, 3)).float() * rep_e
+    Fused correction kernel: compute (E11-E01)-(E10-E00) in one pass.
 
-    e00 = _pairwise(old_batch, old_batch)
-    e01 = _pairwise(old_batch, new_batch)
-    e10 = _pairwise(new_batch, old_batch)
-    e11 = _pairwise(new_batch, new_batch)
-    return e00, e01, e10, e11
+    Instead of 4 separate 5D broadcasts, loads all 4 position combinations
+    once and computes the correction directly. Returns a single [B, B]
+    matrix instead of four, reducing GPU memory and D2H transfer by 4×.
+
+    Only computes for sparse (pair_i, pair_j) pairs that pass the
+    bounding-sphere proximity filter — skips distant pairs entirely.
+    """
+    n_pairs = pair_i.shape[0]
+    if n_pairs == 0:
+        return torch.zeros(B, B, dtype=torch.float32, device=old_batch.device)
+
+    # Gather positions for valid pairs: [n_pairs, mm, 3]
+    oi = old_batch[pair_i]   # [P, mm, 3]
+    ni = new_batch[pair_i]
+    oj = old_batch[pair_j]
+    nj = new_batch[pair_j]
+
+    # 4D broadcast: [P, mm_i, mm_j, 3]
+    oi_e = oi[:, :, None, :]   # [P, mm, 1, 3]
+    ni_e = ni[:, :, None, :]
+    oj_e = oj[:, None, :, :]   # [P, 1, mm, 3]
+    nj_e = nj[:, None, :, :]
+
+    # E00: old_i vs old_j
+    d = oi_e - oj_e
+    d = d - box * torch.round(d * inv_box)
+    c00 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # E01: old_i vs new_j
+    d = oi_e - nj_e
+    d = d - box * torch.round(d * inv_box)
+    c01 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # E10: new_i vs old_j
+    d = ni_e - oj_e
+    d = d - box * torch.round(d * inv_box)
+    c10 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # E11: new_i vs new_j
+    d = ni_e - nj_e
+    d = d - box * torch.round(d * inv_box)
+    c11 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # Correction = (E11 - E01) - (E10 - E00)
+    corr_vals = ((c11.float() - c01.float()) - (c10.float() - c00.float())) * rep_e
+
+    # Scatter into [B, B] matrix
+    corr = torch.zeros(B, B, dtype=torch.float32, device=old_batch.device)
+    corr[pair_i, pair_j] = corr_vals
+    return corr
 
 
 # Try to compile; fall back gracefully if torch.compile is unavailable
 try:
     _batched_delta_e_kernel = torch.compile(
         _batched_delta_e_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
-    _batched_emm_kernel = torch.compile(
-        _batched_emm_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
+    _batched_emm_correction_kernel = torch.compile(
+        _batched_emm_correction_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
 except Exception:
     _batched_delta_e_kernel = _batched_delta_e_kernel_impl
-    _batched_emm_kernel = _batched_emm_kernel_impl
+    _batched_emm_correction_kernel = _batched_emm_correction_kernel_impl
 
 
 def energy_kernel(r2: torch.Tensor, r_rep_sq: float, r_max_sq: float,
@@ -467,7 +507,12 @@ class EnergyComputer:
         """
         Pre-compute ALL energy data for a batch in parallel on GPU:
           1. E_total[i]: delta-E of each proposal vs stationary system
-          2. E_mm[i,j]: 4 pairwise segment energy matrices for rank-1 corrections
+          2. correction[i,j]: rank-1 correction matrix = (E11-E01)-(E10-E00)
+
+        Optimizations over the original 4-matrix approach:
+          - Fused kernel: computes correction directly in one pass (4× less output)
+          - Bounding-sphere filtering: skips distant pairs that cannot interact
+          - Single D2H transfer: 1 matrix instead of 4
 
         Core parallelization from Migacz et al. "Parallel Implementation of
         a Sequential Markov Chain in Monte Carlo Simulations."
@@ -475,7 +520,7 @@ class EnergyComputer:
 
         Returns:
             delta_e: list[float] of length B
-            Emm00, Emm01, Emm10, Emm11: [B, B] tensors (on CPU for scalar access)
+            correction: [B, B] tensor on CPU (rank-1 correction matrix)
         """
         from .batch_proposal import BatchProposal
 
@@ -485,7 +530,7 @@ class EnergyComputer:
         # --- E_total (batched delta-E) ---
         delta_e = self.compute_batch_delta_energy(positions_flat, proposals, N)
 
-        # --- E_mm: pairwise segment energy matrices ---
+        # --- Correction matrix: fused (E11-E01)-(E10-E00) ---
         device = positions_flat.device
         box = self.ns.box_size
         inv_box = self.ns._inv_box
@@ -498,8 +543,7 @@ class EnergyComputer:
         else:
             valid = [i for i in range(B) if proposals[i].n_moved > 0]
             if len(valid) < 2:
-                z = torch.zeros(B, B)
-                return delta_e, z, z.clone(), z.clone(), z.clone()
+                return delta_e, torch.zeros(B, B)
 
             max_moved = max(proposals[i].n_moved for i in valid)
             old_f32 = torch.zeros(B, max_moved, 3, dtype=torch.float32, device=device)
@@ -512,30 +556,57 @@ class EnergyComputer:
                 new_f32[i, :nm] = p.new_positions.float() if p.new_positions.dtype != torch.float32 else p.new_positions
                 nm_list[i] = nm
 
-        if sum(1 for nm in nm_list if nm > 0) < 2:
-            z = torch.zeros(B, B)
-            return delta_e, z, z.clone(), z.clone(), z.clone()
+        valid_indices = [i for i, nm in enumerate(nm_list) if nm > 0]
+        if len(valid_indices) < 2:
+            return delta_e, torch.zeros(B, B)
 
-        # Compute all 4 pairwise segment energy matrices on GPU
-        Emm00, Emm01, Emm10, Emm11 = _batched_emm_kernel(
-            old_f32, new_f32, box, inv_box, r_rep_sq, rep_e)
+        # --- Bounding-sphere pair filtering ---
+        # Compute centroid and max radius for each proposal's moved beads
+        # (old + new combined). Skip pairs whose bounding spheres can't overlap.
+        r_rep = math.sqrt(r_rep_sq)
+        centroids = torch.zeros(B, 3, dtype=torch.float32, device=device)
+        radii = torch.zeros(B, dtype=torch.float32, device=device)
 
-        # Zero out diagonal and invalid entries (vectorized)
-        diag_mask = torch.eye(B, dtype=torch.bool, device=device)
-        Emm00[diag_mask] = 0; Emm01[diag_mask] = 0
-        Emm10[diag_mask] = 0; Emm11[diag_mask] = 0
+        for i in valid_indices:
+            nm = nm_list[i]
+            # Combine old + new positions for bounding sphere
+            all_pos = torch.cat([old_f32[i, :nm], new_f32[i, :nm]], dim=0)  # [2*nm, 3]
+            centroid = all_pos.mean(dim=0)
+            centroids[i] = centroid
+            # Max distance from centroid to any bead
+            d = all_pos - centroid.unsqueeze(0)
+            d = d - box * torch.round(d * inv_box)
+            radii[i] = (d * d).sum(dim=1).max().sqrt()
 
-        invalid_mask = torch.tensor([nm == 0 for nm in nm_list],
-                                     dtype=torch.bool, device=device)
-        if invalid_mask.any():
-            Emm00[invalid_mask, :] = 0; Emm00[:, invalid_mask] = 0
-            Emm01[invalid_mask, :] = 0; Emm01[:, invalid_mask] = 0
-            Emm10[invalid_mask, :] = 0; Emm10[:, invalid_mask] = 0
-            Emm11[invalid_mask, :] = 0; Emm11[:, invalid_mask] = 0
+        # Build sparse pair list: only pairs whose spheres could overlap
+        pair_i_list = []
+        pair_j_list = []
+        for ii in range(len(valid_indices)):
+            i = valid_indices[ii]
+            for jj in range(ii + 1, len(valid_indices)):
+                j = valid_indices[jj]
+                # MIC distance between centroids
+                dc = centroids[i] - centroids[j]
+                dc = dc - box * torch.round(dc * inv_box)
+                dist = (dc * dc).sum().sqrt().item()
+                # Can interact only if dist < radius_i + radius_j + r_rep
+                if dist < radii[i].item() + radii[j].item() + r_rep:
+                    pair_i_list.append(i)
+                    pair_j_list.append(j)
+
+        if not pair_i_list:
+            return delta_e, torch.zeros(B, B)
+
+        pair_i_t = torch.tensor(pair_i_list, dtype=torch.long, device=device)
+        pair_j_t = torch.tensor(pair_j_list, dtype=torch.long, device=device)
+
+        # Fused correction kernel: single pass, single output matrix
+        correction = _batched_emm_correction_kernel(
+            old_f32, new_f32, pair_i_t, pair_j_t,
+            box, inv_box, r_rep_sq, rep_e, B)
 
         # Move to CPU for fast scalar access in acceptance loop
-        return (delta_e,
-                Emm00.cpu(), Emm01.cpu(), Emm10.cpu(), Emm11.cpu())
+        return delta_e, correction.cpu()
 
 
 # ---------------------------------------------------------------------------

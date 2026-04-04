@@ -5,8 +5,8 @@ Analogous to fast_sweep.py but positions stay on GPU. CPU only handles
 the batch permutation logic and sequential Metropolis acceptance loop.
 
 Architecture per batch:
-  GPU: segment_proposal_kernel → delta_e_kernel → emm_kernel
-  D2H: delta_e[B] + Emm[4,B,B]  (~13KB)
+  GPU: segment_proposal_kernel → delta_e_kernel → emm_correction_kernel
+  D2H: delta_e[B] + correction[B,B]  (~3KB)
   CPU: sequential Metropolis with rank-1 corrections
   GPU: apply_moves_kernel (scatter accepted moves)
 """
@@ -268,47 +268,74 @@ class GPUFastSweep:
         return delta_e_out, global_starts
 
     def _launch_emm(self, old_pos, new_pos, meta):
-        """Launch Emm kernel, return 4 [B, B] GPU tensors."""
+        """Launch fused EMM correction kernel, return single [B, B] GPU tensor.
+
+        Optimizations:
+          - Bounding-sphere filtering: skip distant pairs that cannot interact
+          - Fused kernel: computes correction = (E11-E01)-(E10-E00) directly
+          - Single output matrix instead of four (4× less memory + D2H transfer)
+        """
         B = meta['B']
         mm = meta['max_moved']
         dev = self.device
+        n_moved_np = meta['n_moved_np']
 
-        # Build upper-triangle pair indices
+        correction = torch.zeros(B, B, dtype=torch.float32, device=dev)
+
+        # Find valid proposals
+        valid = [i for i in range(B) if n_moved_np[i] > 0]
+        if len(valid) < 2:
+            return correction
+
+        # Bounding-sphere filtering: compute centroid + radius for each proposal
+        box = self.box
+        inv_box = self.inv_box
+        r_rep = math.sqrt(self.r_rep_sq)
+
+        centroids = np.zeros((B, 3), dtype=np.float32)
+        radii = np.zeros(B, dtype=np.float32)
+
+        # Pull positions to CPU for bounding sphere computation (small data)
+        old_cpu = old_pos.cpu().numpy()  # [B, mm, 3]
+        new_cpu = new_pos.cpu().numpy()
+
+        for i in valid:
+            nm = int(n_moved_np[i])
+            all_pos = np.concatenate([old_cpu[i, :nm], new_cpu[i, :nm]], axis=0)
+            centroid = all_pos.mean(axis=0)
+            centroids[i] = centroid
+            d = all_pos - centroid
+            d = d - box * np.round(d * inv_box)
+            radii[i] = np.sqrt((d * d).sum(axis=1).max())
+
+        # Build sparse pair list: only pairs whose bounding spheres overlap
         pairs_i = []
         pairs_j = []
-        n_moved_np = meta['n_moved_np']
-        for i in range(B):
-            if n_moved_np[i] == 0:
-                continue
-            for j in range(i + 1, B):
-                if n_moved_np[j] == 0:
-                    continue
-                pairs_i.append(i)
-                pairs_j.append(j)
+        for ii in range(len(valid)):
+            i = valid[ii]
+            for jj in range(ii + 1, len(valid)):
+                j = valid[jj]
+                dc = centroids[i] - centroids[j]
+                dc = dc - box * np.round(dc * inv_box)
+                dist = np.sqrt((dc * dc).sum())
+                if dist < radii[i] + radii[j] + r_rep:
+                    pairs_i.append(i)
+                    pairs_j.append(j)
 
         n_pairs = len(pairs_i)
-
-        emm00 = torch.zeros(B, B, dtype=torch.float32, device=dev)
-        emm01 = torch.zeros(B, B, dtype=torch.float32, device=dev)
-        emm10 = torch.zeros(B, B, dtype=torch.float32, device=dev)
-        emm11 = torch.zeros(B, B, dtype=torch.float32, device=dev)
-
         if n_pairs == 0:
-            return emm00, emm01, emm10, emm11
+            return correction
 
         pair_i_gpu = torch.tensor(pairs_i, dtype=torch.int32, device=dev)
         pair_j_gpu = torch.tensor(pairs_j, dtype=torch.int32, device=dev)
 
-        kernel = self.km['emm']
+        kernel = self.km['emm_correction']
         kernel(
             (n_pairs,), (256,),
             (_torch_to_cupy(old_pos),
              _torch_to_cupy(new_pos),
              _torch_to_cupy(meta['n_moved']),
-             _torch_to_cupy(emm00),
-             _torch_to_cupy(emm01),
-             _torch_to_cupy(emm10),
-             _torch_to_cupy(emm11),
+             _torch_to_cupy(correction),
              _torch_to_cupy(pair_i_gpu),
              _torch_to_cupy(pair_j_gpu),
              np.float32(self.box), np.float32(self.inv_box),
@@ -316,7 +343,7 @@ class GPUFastSweep:
              np.int32(mm), np.int32(B), np.int32(n_pairs))
         )
 
-        return emm00, emm01, emm10, emm11
+        return correction
 
     def _apply_accepted_moves(self, positions: torch.Tensor,
                               new_pos: torch.Tensor,
@@ -448,15 +475,12 @@ def gpu_perform_sweep(positions: torch.Tensor, seg_info: SegmentInfo,
         # GPU: compute delta-E
         delta_e_gpu, global_starts = sweep._launch_delta_e(old_pos, new_pos, meta)
 
-        # GPU: compute Emm matrices
-        emm00, emm01, emm10, emm11 = sweep._launch_emm(old_pos, new_pos, meta)
+        # GPU: compute fused correction matrix
+        correction_gpu = sweep._launch_emm(old_pos, new_pos, meta)
 
-        # D2H: copy results to CPU
+        # D2H: copy results to CPU (1 matrix instead of 4)
         delta_e = delta_e_gpu.cpu().tolist()
-        e00 = emm00.cpu().tolist()
-        e01 = emm01.cpu().tolist()
-        e10 = emm10.cpu().tolist()
-        e11 = emm11.cpu().tolist()
+        corr = correction_gpu.cpu().tolist()
 
         # CPU: sequential Metropolis acceptance with rank-1 corrections
         n_moved_np = meta['n_moved_np']
@@ -475,13 +499,13 @@ def gpu_perform_sweep(positions: torch.Tensor, seg_info: SegmentInfo,
 
             accepted_indices.append(i)
 
-            # Rank-1 energy correction for subsequent proposals
+            # Rank-1 energy correction from fused correction matrix
             for j in range(i + 1, B):
                 if n_moved_np[j] == 0:
                     continue
-                correction = (e11[i][j] - e01[i][j]) - (e10[i][j] - e00[i][j])
-                if correction != 0.0:
-                    delta_e[j] += correction
+                c = corr[i][j]
+                if c != 0.0:
+                    delta_e[j] += c
 
         # GPU: apply accepted moves
         sweep._apply_accepted_moves(positions, new_pos, accepted_indices,
@@ -556,16 +580,13 @@ def gpu_perform_sweep(positions: torch.Tensor, seg_info: SegmentInfo,
         delta_e_pivot_gpu, global_starts_pivot = sweep._launch_delta_e(
             old_pos_pivot, new_pos_pivot, pivot_meta)
 
-        # GPU: Emm matrices for rank-1
-        emm00, emm01, emm10, emm11 = sweep._launch_emm(
+        # GPU: fused correction matrix for rank-1
+        correction_gpu = sweep._launch_emm(
             old_pos_pivot, new_pos_pivot, pivot_meta)
 
-        # D2H
+        # D2H (1 matrix instead of 4)
         delta_e = delta_e_pivot_gpu.cpu().tolist()
-        pe00 = emm00.cpu().tolist()
-        pe01 = emm01.cpu().tolist()
-        pe10 = emm10.cpu().tolist()
-        pe11 = emm11.cpu().tolist()
+        corr = correction_gpu.cpu().tolist()
 
         # CPU: sequential Metropolis with rank-1
         accepted_indices = []
@@ -584,9 +605,9 @@ def gpu_perform_sweep(positions: torch.Tensor, seg_info: SegmentInfo,
             for j in range(i + 1, Bp):
                 if n_moveds[j] == 0:
                     continue
-                correction = (pe11[i][j] - pe01[i][j]) - (pe10[i][j] - pe00[i][j])
-                if correction != 0.0:
-                    delta_e[j] += correction
+                c = corr[i][j]
+                if c != 0.0:
+                    delta_e[j] += c
 
         # GPU: apply accepted pivot moves
         if accepted_indices:

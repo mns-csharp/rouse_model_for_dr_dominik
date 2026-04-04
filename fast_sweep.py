@@ -586,13 +586,10 @@ def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng,
         r_rep_sq = cfg.r_rep_sq
         rep_e = cfg.repulsive_energy
 
-        # Pre-compute all 4 E_mm matrices: E00[i,j], E01[i,j], E10[i,j], E11[i,j]
-        # E_mm[k,j] = pairwise energy between segments k and j
-        # Using numba-JIT'd kernel for direct pairwise computation
-        Emm00 = [[0.0]*B for _ in range(B)]
-        Emm01 = [[0.0]*B for _ in range(B)]
-        Emm10 = [[0.0]*B for _ in range(B)]
-        Emm11 = [[0.0]*B for _ in range(B)]
+        # Pre-compute correction matrix directly: corr[i,j] = (E11-E01)-(E10-E00)
+        # Using numba-JIT'd kernel for direct pairwise computation.
+        # Cell-proximity filter skips pairs with disjoint neighborhoods.
+        corr = [[0.0]*B for _ in range(B)]
 
         for i in range(B):
             if proposals[i].n_moved == 0:
@@ -605,18 +602,21 @@ def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng,
                 nbr_j = cell_nbr_sets[j]
                 if nbr_i is not None and nbr_j is not None and nbr_i.isdisjoint(nbr_j):
                     continue
-                Emm00[i][j] = _compute_segment_pair_energy_fast(
+                e00 = _compute_segment_pair_energy_fast(
                     proposals[i].old_pos, proposals[j].old_pos,
                     box, inv_box, r_rep_sq, rep_e)
-                Emm01[i][j] = _compute_segment_pair_energy_fast(
+                e01 = _compute_segment_pair_energy_fast(
                     proposals[i].old_pos, proposals[j].new_pos,
                     box, inv_box, r_rep_sq, rep_e)
-                Emm10[i][j] = _compute_segment_pair_energy_fast(
+                e10 = _compute_segment_pair_energy_fast(
                     proposals[i].new_pos, proposals[j].old_pos,
                     box, inv_box, r_rep_sq, rep_e)
-                Emm11[i][j] = _compute_segment_pair_energy_fast(
+                e11 = _compute_segment_pair_energy_fast(
                     proposals[i].new_pos, proposals[j].new_pos,
                     box, inv_box, r_rep_sq, rep_e)
+                c = (e11 - e01) - (e10 - e00)
+                if c != 0.0:
+                    corr[i][j] = c
 
         # ── SEQUENTIAL ACCEPTANCE (reads pre-computed values) ─────
         for i in range(B):
@@ -635,17 +635,13 @@ def fast_perform_sweep(positions_np, seg_info, energy_comp, cfg, stats, rng,
             _validate_boundary_bonds_np(positions_np, p.chain_idx, p.bead_start,
                                          p.n_moved, N, cfg.l0, box, inv_box)
 
-            # Rank-1 energy correction from pre-computed E_mm matrices
+            # Rank-1 energy correction from pre-computed correction matrix
             for j in range(i + 1, B):
                 if proposals[j].n_moved == 0:
                     continue
-                e00 = Emm00[i][j]
-                e01 = Emm01[i][j]
-                e10 = Emm10[i][j]
-                e11 = Emm11[i][j]
-                correction = (e11 - e01) - (e10 - e00)
-                if correction != 0.0:
-                    delta_e[j] += correction
+                c = corr[i][j]
+                if c != 0.0:
+                    delta_e[j] += c
 
     # ── Phase 2: Pivot moves ────────────────────────────────────────
     if skip_pivot:
