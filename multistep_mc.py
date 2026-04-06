@@ -134,8 +134,8 @@ def _process_batch(proposals, state, energy_comp, positions_flat,
         # ── BATCHED PATH: parallel energy matrix computation ──────────
         # Pre-compute ALL energies in parallel (Migacz et al.).
         # E_total[i]: proposal i vs stationary system
-        # E_mm{00,01,10,11}[i,j]: pairwise segment energies for rank-1
-        delta_e, Emm00, Emm01, Emm10, Emm11 = \
+        # correction[i,j]: fused rank-1 correction = (E11-E01)-(E10-E00)
+        delta_e, correction_matrix = \
             energy_comp.compute_batch_energy_matrices(
                 positions_flat, proposals, N)
 
@@ -144,12 +144,8 @@ def _process_batch(proposals, state, energy_comp, positions_flat,
 
         is_bp = isinstance(proposals, BatchProposal)
 
-        # Pre-fetch E_mm as Python floats to avoid per-element .item() calls
-        # (each .item() forces GPU→CPU sync at ~16μs)
-        emm00 = Emm00.tolist()
-        emm01 = Emm01.tolist()
-        emm10 = Emm10.tolist()
-        emm11 = Emm11.tolist()
+        # Pre-fetch correction as Python floats to avoid per-element .item()
+        corr = correction_matrix.tolist()
 
         # Sequential acceptance — reads pre-computed values only
         for i in range(B):
@@ -174,14 +170,14 @@ def _process_batch(proposals, state, energy_comp, positions_flat,
                 state.apply_move(proposals[i].chain_idx, proposals[i].bead_start,
                                  proposals[i].new_positions)
 
-            # Rank-1 update: pure Python float reads from pre-fetched lists
+            # Rank-1 update from pre-computed fused correction matrix
             for j in range(i + 1, B):
                 nm_j = proposals.n_moved[j] if is_bp else proposals[j].n_moved
                 if nm_j == 0:
                     continue
-                correction = (emm11[i][j] - emm01[i][j]) - (emm10[i][j] - emm00[i][j])
-                if correction != 0.0:
-                    delta_e[j] += correction
+                c = corr[i][j]
+                if c != 0.0:
+                    delta_e[j] += c
 
     else:
         # ── SEQUENTIAL PATH: cell-list based ──────────────────────────
@@ -285,26 +281,55 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
     ns = state.ns
     device = cfg.get_torch_device()
 
-    # Random permutation of all segments
-    perm = torch.randperm(total_segs, generator=gen, device=device)
+    # ── Build batched permutation with same-chain exclusion ──────────
+    # Group segments into rounds (one segment per chain per round) so
+    # that within each batch, all segments are from different chains.
+    # This prevents the multistep algorithm from breaking boundary bonds
+    # when two same-chain segments are accepted from the same pre-batch state.
+    import random as _random
 
-    # ── Phase 1: Batched multistep segment moves ─────────────────────
     batch_size = MOVE_SIZE
-    n_batches = (total_segs + batch_size - 1) // batch_size
+    segs_per_chain = seg_info.segs_per_chain
+    n_chains = cfg.n_chains
+
+    buckets = [[] for _ in range(n_chains)]
+    for gs in range(total_segs):
+        buckets[seg_info.seg_chain[gs]].append(gs)
+    rng_py = _random.Random(gen.initial_seed())
+    for bucket in buckets:
+        rng_py.shuffle(bucket)
+
+    rounds = []
+    for k in range(segs_per_chain):
+        round_segs = [bucket[k] for bucket in buckets if k < len(bucket)]
+        rng_py.shuffle(round_segs)
+        rounds.append(round_segs)
+
+    perm = []
+    round_boundaries = []
+    for round_segs in rounds:
+        round_boundaries.append(len(perm))
+        perm.extend(round_segs)
+    round_boundaries.append(len(perm))
+
+    batch_ranges = []
+    for ri in range(len(rounds)):
+        r_start = round_boundaries[ri]
+        r_end = round_boundaries[ri + 1]
+        for bs in range(r_start, r_end, batch_size):
+            batch_ranges.append((bs, min(bs + batch_size, r_end)))
+
     # Rebuild cell list every REBUILD_INTERVAL batches to amortize build cost.
-    # Between rebuilds, the cell list is slightly stale but the rank-1
-    # corrections and auto-updating positions_flat view keep energy accurate.
     REBUILD_INTERVAL = 3
 
     batched = cfg.use_batched_mode
 
-    for b in range(n_batches):
-        b_start = b * batch_size
-        b_end = min(b_start + batch_size, total_segs)
+    # ── Phase 1: Batched multistep segment moves ─────────────────────
+    for b_idx, (b_start, b_end) in enumerate(batch_ranges):
 
         # Rebuild cell-list periodically (sequential mode needs it for
         # delta-E and rank-1; batched mode skips — uses direct pairwise)
-        if not batched and b % REBUILD_INTERVAL == 0:
+        if not batched and b_idx % REBUILD_INTERVAL == 0:
             positions_flat = state.get_all_flat()
             energy_comp.rebuild_cell_list(positions_flat)
         elif batched:
@@ -313,7 +338,7 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
         # Propose all moves in this batch
         seg_list = []
         for idx in range(b_start, b_end):
-            global_seg = perm[idx].item()
+            global_seg = perm[idx]
             seg_list.append((seg_info.seg_chain[global_seg],
                              seg_info.seg_local[global_seg]))
 
@@ -369,15 +394,12 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
             # Energy matrices computed on GPU via BatchProposal (no repack)
             positions_flat = state.get_all_flat()
             B = bp.B
-            delta_e, Emm00, Emm01, Emm10, Emm11 = \
+            delta_e, correction_matrix = \
                 energy_comp.compute_batch_energy_matrices(
                     positions_flat, bp, N)
 
-            # Pre-fetch E_mm as Python floats
-            emm00 = Emm00.tolist()
-            emm01 = Emm01.tolist()
-            emm10 = Emm10.tolist()
-            emm11 = Emm11.tolist()
+            # Pre-fetch correction as Python floats
+            corr = correction_matrix.tolist()
 
             # Sequential acceptance with rank-1 corrections
             for i in range(B):
@@ -398,14 +420,15 @@ def perform_sweep(state: ChainState, energy_comp: EnergyComputer,
                 new_pos_gpu = bp.new_pos[i, :nm]
                 positions_cpu[ci, bs:bs + nm] = new_pos_gpu.cpu()
                 state.positions[ci, bs:bs + nm] = new_pos_gpu
+                state._validate_boundary_bonds(ci, bs, nm)
 
-                # Rank-1 update
+                # Rank-1 update from pre-computed fused correction matrix
                 for j in range(i + 1, B):
                     if bp.n_moved[j] == 0:
                         continue
-                    correction = (emm11[i][j] - emm01[i][j]) - (emm10[i][j] - emm00[i][j])
-                    if correction != 0.0:
-                        delta_e[j] += correction
+                    c = corr[i][j]
+                    if c != 0.0:
+                        delta_e[j] += c
 
         # Ensure GPU state is up to date
         state.positions.copy_(positions_cpu.to(device))

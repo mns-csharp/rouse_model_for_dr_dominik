@@ -22,7 +22,11 @@ from .number_space import NumberSpace
 # Compiled GPU kernels for batched energy computation (FP32)
 # ---------------------------------------------------------------------------
 
-_COMPILE_MODE = 'reduce-overhead'
+# 'reduce-overhead' enables CUDA graphs, which require static tensor shapes.
+# MC simulations have dynamic shapes (varying segment sizes per sweep),
+# causing CUDA graph capture failures (cudaErrorUnknown) after many distinct
+# shapes are encountered. Use 'default' for kernel fusion without CUDA graphs.
+_COMPILE_MODE = 'default'
 
 def _batched_delta_e_kernel_impl(pos_f32, old_batch, new_batch,
                                   gs_tensor, nm_tensor,
@@ -66,33 +70,73 @@ def _batched_delta_e_kernel_impl(pos_f32, old_batch, new_batch,
     return delta_v
 
 
-def _batched_emm_kernel_impl(old_batch, new_batch, box, inv_box, r_rep_sq, rep_e):
+def _batched_emm_correction_kernel_impl(old_batch, new_batch,
+                                         pair_i, pair_j,
+                                         box, inv_box, r_rep_sq, rep_e, B):
     """
-    Compute all 4 pairwise segment energy matrices E00, E01, E10, E11.
-    [B, B, max_moved, max_moved, 3] → [B, B] count matrices.
-    """
-    def _pairwise(pos_i, pos_j):
-        d = pos_i[:, None, :, None, :] - pos_j[None, :, None, :, :]
-        d = d - box * torch.round(d * inv_box)
-        r2 = (d * d).sum(dim=4)
-        return (r2 < r_rep_sq).sum(dim=(2, 3)).float() * rep_e
+    Fused correction kernel: compute (E11-E01)-(E10-E00) in one pass.
 
-    e00 = _pairwise(old_batch, old_batch)
-    e01 = _pairwise(old_batch, new_batch)
-    e10 = _pairwise(new_batch, old_batch)
-    e11 = _pairwise(new_batch, new_batch)
-    return e00, e01, e10, e11
+    Instead of 4 separate 5D broadcasts, loads all 4 position combinations
+    once and computes the correction directly. Returns a single [B, B]
+    matrix instead of four, reducing GPU memory and D2H transfer by 4×.
+
+    Only computes for sparse (pair_i, pair_j) pairs that pass the
+    bounding-sphere proximity filter — skips distant pairs entirely.
+    """
+    n_pairs = pair_i.shape[0]
+    if n_pairs == 0:
+        return torch.zeros(B, B, dtype=torch.float32, device=old_batch.device)
+
+    # Gather positions for valid pairs: [n_pairs, mm, 3]
+    oi = old_batch[pair_i]   # [P, mm, 3]
+    ni = new_batch[pair_i]
+    oj = old_batch[pair_j]
+    nj = new_batch[pair_j]
+
+    # 4D broadcast: [P, mm_i, mm_j, 3]
+    oi_e = oi[:, :, None, :]   # [P, mm, 1, 3]
+    ni_e = ni[:, :, None, :]
+    oj_e = oj[:, None, :, :]   # [P, 1, mm, 3]
+    nj_e = nj[:, None, :, :]
+
+    # E00: old_i vs old_j
+    d = oi_e - oj_e
+    d = d - box * torch.round(d * inv_box)
+    c00 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # E01: old_i vs new_j
+    d = oi_e - nj_e
+    d = d - box * torch.round(d * inv_box)
+    c01 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # E10: new_i vs old_j
+    d = ni_e - oj_e
+    d = d - box * torch.round(d * inv_box)
+    c10 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # E11: new_i vs new_j
+    d = ni_e - nj_e
+    d = d - box * torch.round(d * inv_box)
+    c11 = ((d * d).sum(-1) < r_rep_sq).sum(dim=(1, 2))
+
+    # Correction = (E11 - E01) - (E10 - E00)
+    corr_vals = ((c11.float() - c01.float()) - (c10.float() - c00.float())) * rep_e
+
+    # Scatter into [B, B] matrix
+    corr = torch.zeros(B, B, dtype=torch.float32, device=old_batch.device)
+    corr[pair_i, pair_j] = corr_vals
+    return corr
 
 
 # Try to compile; fall back gracefully if torch.compile is unavailable
 try:
     _batched_delta_e_kernel = torch.compile(
         _batched_delta_e_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
-    _batched_emm_kernel = torch.compile(
-        _batched_emm_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
+    _batched_emm_correction_kernel = torch.compile(
+        _batched_emm_correction_kernel_impl, mode=_COMPILE_MODE, dynamic=True)
 except Exception:
     _batched_delta_e_kernel = _batched_delta_e_kernel_impl
-    _batched_emm_kernel = _batched_emm_kernel_impl
+    _batched_emm_correction_kernel = _batched_emm_correction_kernel_impl
 
 
 def energy_kernel(r2: torch.Tensor, r_rep_sq: float, r_max_sq: float,
@@ -463,7 +507,12 @@ class EnergyComputer:
         """
         Pre-compute ALL energy data for a batch in parallel on GPU:
           1. E_total[i]: delta-E of each proposal vs stationary system
-          2. E_mm[i,j]: 4 pairwise segment energy matrices for rank-1 corrections
+          2. correction[i,j]: rank-1 correction matrix = (E11-E01)-(E10-E00)
+
+        Optimizations over the original 4-matrix approach:
+          - Fused kernel: computes correction directly in one pass (4× less output)
+          - Bounding-sphere filtering: skips distant pairs that cannot interact
+          - Single D2H transfer: 1 matrix instead of 4
 
         Core parallelization from Migacz et al. "Parallel Implementation of
         a Sequential Markov Chain in Monte Carlo Simulations."
@@ -471,7 +520,7 @@ class EnergyComputer:
 
         Returns:
             delta_e: list[float] of length B
-            Emm00, Emm01, Emm10, Emm11: [B, B] tensors (on CPU for scalar access)
+            correction: [B, B] tensor on CPU (rank-1 correction matrix)
         """
         from .batch_proposal import BatchProposal
 
@@ -481,7 +530,7 @@ class EnergyComputer:
         # --- E_total (batched delta-E) ---
         delta_e = self.compute_batch_delta_energy(positions_flat, proposals, N)
 
-        # --- E_mm: pairwise segment energy matrices ---
+        # --- Correction matrix: fused (E11-E01)-(E10-E00) ---
         device = positions_flat.device
         box = self.ns.box_size
         inv_box = self.ns._inv_box
@@ -494,8 +543,7 @@ class EnergyComputer:
         else:
             valid = [i for i in range(B) if proposals[i].n_moved > 0]
             if len(valid) < 2:
-                z = torch.zeros(B, B)
-                return delta_e, z, z.clone(), z.clone(), z.clone()
+                return delta_e, torch.zeros(B, B)
 
             max_moved = max(proposals[i].n_moved for i in valid)
             old_f32 = torch.zeros(B, max_moved, 3, dtype=torch.float32, device=device)
@@ -508,27 +556,224 @@ class EnergyComputer:
                 new_f32[i, :nm] = p.new_positions.float() if p.new_positions.dtype != torch.float32 else p.new_positions
                 nm_list[i] = nm
 
-        if sum(1 for nm in nm_list if nm > 0) < 2:
-            z = torch.zeros(B, B)
-            return delta_e, z, z.clone(), z.clone(), z.clone()
+        valid_indices = [i for i, nm in enumerate(nm_list) if nm > 0]
+        if len(valid_indices) < 2:
+            return delta_e, torch.zeros(B, B)
 
-        # Compute all 4 pairwise segment energy matrices on GPU
-        Emm00, Emm01, Emm10, Emm11 = _batched_emm_kernel(
-            old_f32, new_f32, box, inv_box, r_rep_sq, rep_e)
+        # --- Bounding-sphere pair filtering ---
+        # Compute centroid and max radius for each proposal's moved beads
+        # (old + new combined). Skip pairs whose bounding spheres can't overlap.
+        r_rep = math.sqrt(r_rep_sq)
+        centroids = torch.zeros(B, 3, dtype=torch.float32, device=device)
+        radii = torch.zeros(B, dtype=torch.float32, device=device)
 
-        # Zero out diagonal and invalid entries (vectorized)
-        diag_mask = torch.eye(B, dtype=torch.bool, device=device)
-        Emm00[diag_mask] = 0; Emm01[diag_mask] = 0
-        Emm10[diag_mask] = 0; Emm11[diag_mask] = 0
+        for i in valid_indices:
+            nm = nm_list[i]
+            # Combine old + new positions for bounding sphere
+            all_pos = torch.cat([old_f32[i, :nm], new_f32[i, :nm]], dim=0)  # [2*nm, 3]
+            centroid = all_pos.mean(dim=0)
+            centroids[i] = centroid
+            # Max distance from centroid to any bead
+            d = all_pos - centroid.unsqueeze(0)
+            d = d - box * torch.round(d * inv_box)
+            radii[i] = (d * d).sum(dim=1).max().sqrt()
 
-        invalid_mask = torch.tensor([nm == 0 for nm in nm_list],
-                                     dtype=torch.bool, device=device)
-        if invalid_mask.any():
-            Emm00[invalid_mask, :] = 0; Emm00[:, invalid_mask] = 0
-            Emm01[invalid_mask, :] = 0; Emm01[:, invalid_mask] = 0
-            Emm10[invalid_mask, :] = 0; Emm10[:, invalid_mask] = 0
-            Emm11[invalid_mask, :] = 0; Emm11[:, invalid_mask] = 0
+        # Build sparse pair list: only pairs whose spheres could overlap
+        pair_i_list = []
+        pair_j_list = []
+        for ii in range(len(valid_indices)):
+            i = valid_indices[ii]
+            for jj in range(ii + 1, len(valid_indices)):
+                j = valid_indices[jj]
+                # MIC distance between centroids
+                dc = centroids[i] - centroids[j]
+                dc = dc - box * torch.round(dc * inv_box)
+                dist = (dc * dc).sum().sqrt().item()
+                # Can interact only if dist < radius_i + radius_j + r_rep
+                if dist < radii[i].item() + radii[j].item() + r_rep:
+                    pair_i_list.append(i)
+                    pair_j_list.append(j)
+
+        if not pair_i_list:
+            return delta_e, torch.zeros(B, B)
+
+        pair_i_t = torch.tensor(pair_i_list, dtype=torch.long, device=device)
+        pair_j_t = torch.tensor(pair_j_list, dtype=torch.long, device=device)
+
+        # Fused correction kernel: single pass, single output matrix
+        correction = _batched_emm_correction_kernel(
+            old_f32, new_f32, pair_i_t, pair_j_t,
+            box, inv_box, r_rep_sq, rep_e, B)
 
         # Move to CPU for fast scalar access in acceptance loop
-        return (delta_e,
-                Emm00.cpu(), Emm01.cpu(), Emm10.cpu(), Emm11.cpu())
+        return delta_e, correction.cpu()
+
+
+# ---------------------------------------------------------------------------
+# Validation utilities
+# ---------------------------------------------------------------------------
+
+def compute_delta_energy_bruteforce(positions_flat: torch.Tensor,
+                                     chain_idx: int, bead_start: int,
+                                     old_positions: torch.Tensor,
+                                     new_positions: torch.Tensor,
+                                     N: int, ns: 'NumberSpace',
+                                     r_rep_sq: float,
+                                     repulsive_energy: float) -> float:
+    """
+    Brute-force all-pairs delta-E computation (no cell list).
+
+    Computes energy change by scanning ALL beads in the system against the
+    moved segment. Used as a reference for validating the cell-list path.
+    O(n_moved * n_total) — too slow for production, correct by construction.
+    """
+    n_moved = old_positions.shape[0]
+    n_total = positions_flat.shape[0]
+    global_start = chain_idx * N + bead_start
+    global_end = global_start + n_moved
+    box = ns.box_size
+    inv_box = ns._inv_box
+
+    # Stationary beads = all beads NOT in the moved segment
+    mask = torch.ones(n_total, dtype=torch.bool, device=positions_flat.device)
+    mask[global_start:global_end] = False
+    stationary = positions_flat[mask]  # [K, 3]
+
+    delta_e = 0.0
+
+    if stationary.shape[0] > 0:
+        # Old interactions
+        d_old = stationary.unsqueeze(0) - old_positions.unsqueeze(1)
+        d_old = d_old - box * torch.round(d_old * inv_box)
+        r2_old = (d_old * d_old).sum(dim=2)
+        e_old = (r2_old < r_rep_sq).sum().item()
+
+        # New interactions
+        d_new = stationary.unsqueeze(0) - new_positions.unsqueeze(1)
+        d_new = d_new - box * torch.round(d_new * inv_box)
+        r2_new = (d_new * d_new).sum(dim=2)
+        e_new = (r2_new < r_rep_sq).sum().item()
+
+        delta_e += (e_new - e_old) * repulsive_energy
+
+    # Intra-segment (moved-moved) upper triangle
+    if n_moved > 1:
+        d_old_mm = old_positions.unsqueeze(1) - old_positions.unsqueeze(0)
+        d_old_mm = d_old_mm - box * torch.round(d_old_mm * inv_box)
+        r2_old_mm = (d_old_mm * d_old_mm).sum(dim=2)
+
+        d_new_mm = new_positions.unsqueeze(1) - new_positions.unsqueeze(0)
+        d_new_mm = d_new_mm - box * torch.round(d_new_mm * inv_box)
+        r2_new_mm = (d_new_mm * d_new_mm).sum(dim=2)
+
+        triu = torch.triu(torch.ones(n_moved, n_moved, dtype=torch.bool,
+                                      device=positions_flat.device), diagonal=1)
+        e_old_mm = (r2_old_mm[triu] < r_rep_sq).sum().item()
+        e_new_mm = (r2_new_mm[triu] < r_rep_sq).sum().item()
+        delta_e += (e_new_mm - e_old_mm) * repulsive_energy
+
+    return delta_e
+
+
+def validate_cell_list_vs_bruteforce(energy_comp: 'EnergyComputer',
+                                      state: 'ChainState',
+                                      cfg: 'SimulationConfig',
+                                      n_samples: int = 10) -> dict:
+    """
+    Validate that cell-list delta-E matches brute-force all-pairs.
+
+    Proposes n_samples random hinge moves and compares the two energy paths.
+    Returns dict with 'max_abs_error', 'all_match' (bool), and 'details'.
+    """
+    from .mc_moves import propose_segment_move
+    ns = state.ns
+    N = cfg.N
+    gen = cfg.get_torch_gen()
+    positions_flat = state.get_all_flat()
+    energy_comp.rebuild_cell_list(positions_flat)
+
+    max_err = 0.0
+    details = []
+    seg_info = state.segments
+
+    for i in range(n_samples):
+        chain_idx = i % cfg.n_chains
+        local_seg = i % seg_info.segs_per_chain
+        proposal = propose_segment_move(state, chain_idx, local_seg, gen, cfg)
+        if proposal.n_moved == 0:
+            continue
+
+        de_cell = energy_comp.compute_delta_energy_move(
+            positions_flat, proposal.chain_idx, proposal.bead_start,
+            proposal.old_positions, proposal.new_positions, N)
+
+        de_brute = compute_delta_energy_bruteforce(
+            positions_flat, proposal.chain_idx, proposal.bead_start,
+            proposal.old_positions, proposal.new_positions,
+            N, ns, cfg.r_rep_sq, cfg.repulsive_energy)
+
+        err = abs(de_cell - de_brute)
+        max_err = max(max_err, err)
+        details.append({'cell_list': de_cell, 'bruteforce': de_brute, 'error': err})
+
+    return {
+        'max_abs_error': max_err,
+        'all_match': max_err == 0.0,
+        'details': details,
+    }
+
+
+def validate_fp32_vs_fp64(energy_comp: 'EnergyComputer',
+                           state: 'ChainState',
+                           cfg: 'SimulationConfig',
+                           n_samples: int = 10,
+                           atol: float = 1.0) -> dict:
+    """
+    Validate that FP32 GPU batched delta-E agrees with FP64 CPU delta-E.
+
+    Proposes n_samples moves and compares:
+      - FP64 CPU: cell-list based compute_delta_energy_move (float64)
+      - FP32 GPU: batched compute_batch_delta_energy (float32 kernel)
+
+    For the athermal overlap-counting kernel, differences should be exactly
+    zero (boolean comparisons are precision-independent). The atol parameter
+    guards against edge cases near the cutoff boundary.
+
+    Returns dict with 'max_abs_error', 'all_within_tol', and 'details'.
+    """
+    from .mc_moves import propose_segment_move
+    N = cfg.N
+    gen = cfg.get_torch_gen()
+    positions_flat = state.get_all_flat()
+    energy_comp.rebuild_cell_list(positions_flat)
+
+    max_err = 0.0
+    details = []
+    seg_info = state.segments
+
+    for i in range(n_samples):
+        chain_idx = i % cfg.n_chains
+        local_seg = i % seg_info.segs_per_chain
+        proposal = propose_segment_move(state, chain_idx, local_seg, gen, cfg)
+        if proposal.n_moved == 0:
+            continue
+
+        # FP64 CPU path (cell-list)
+        de_fp64 = energy_comp.compute_delta_energy_move(
+            positions_flat, proposal.chain_idx, proposal.bead_start,
+            proposal.old_positions, proposal.new_positions, N)
+
+        # FP32 batched path (uses float32 kernel internally)
+        de_fp32_list = energy_comp.compute_batch_delta_energy(
+            positions_flat, [proposal], N)
+        de_fp32 = de_fp32_list[0]
+
+        err = abs(de_fp64 - de_fp32)
+        max_err = max(max_err, err)
+        details.append({'fp64': de_fp64, 'fp32': de_fp32, 'error': err})
+
+    return {
+        'max_abs_error': max_err,
+        'all_within_tol': max_err <= atol,
+        'details': details,
+    }

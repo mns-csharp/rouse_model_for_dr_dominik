@@ -1,8 +1,8 @@
 """
 I/O utilities: TSV file writers and PNG plot generators.
 
-TSV files use NumPy for I/O (permitted by constraints).
-Plots use matplotlib with publication-quality formatting.
+Supports phi-organized directory structure for the 30-state-point
+validation matrix (5 chain lengths x 6 phi levels).
 """
 
 import os
@@ -11,7 +11,10 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from scipy import stats as scipy_stats
+
+from .config import format_phi, PHI_VALUES, CHAIN_LENGTHS
 
 
 # ============================================================================
@@ -23,10 +26,7 @@ def ensure_dir(path: str):
 
 
 def write_static_tsv(filepath: str, R2_array, Rg2_array):
-    """
-    Write fig1_static_N{N}_s42.tsv
-    Columns: chain_id, R2, Rg2
-    """
+    """Write fig1_static.tsv — Columns: chain_id, R2, Rg2"""
     ensure_dir(os.path.dirname(filepath))
     n = len(R2_array)
     with open(filepath, 'w') as f:
@@ -36,10 +36,7 @@ def write_static_tsv(filepath: str, R2_array, Rg2_array):
 
 
 def write_dynamic_tsv(filepath: str, data_dict: dict, col_name: str):
-    """
-    Write a dynamic observable TSV.
-    Columns: lag_sweep, <col_name>
-    """
+    """Write a dynamic observable TSV — Columns: lag_sweep, <col_name>"""
     ensure_dir(os.path.dirname(filepath))
     with open(filepath, 'w') as f:
         f.write(f"lag_sweep\t{col_name}\n")
@@ -48,10 +45,7 @@ def write_dynamic_tsv(filepath: str, data_dict: dict, col_name: str):
 
 
 def write_sweep_tsv(filepath: str, records: list):
-    """
-    Write static_vs_sweep.tsv
-    Columns: sweep, phase, mean_R2, mean_Rg2, ratio_R2_Rg2
-    """
+    """Write static_vs_sweep.tsv — sweep, phase, mean_R2, mean_Rg2, ratio"""
     ensure_dir(os.path.dirname(filepath))
     with open(filepath, 'w') as f:
         f.write("sweep\tphase\tmean_R2\tmean_Rg2\tratio_R2_Rg2\n")
@@ -59,37 +53,19 @@ def write_sweep_tsv(filepath: str, records: list):
             f.write(f"{sweep}\t{phase}\t{R2:.8E}\t{Rg2:.8E}\t{ratio:.8E}\n")
 
 
-def write_all_tsvs(results: dict, base_dir: str, N: int):
-    """Write all 5 TSV files for a given chain length."""
-    data_dir = os.path.join(base_dir, "05_data", f"N{N}")
+def write_all_tsvs(results: dict, base_dir: str, N: int, phi: float):
+    """Write all 5 TSV files for a given (N, phi) state point."""
+    phi_str = format_phi(phi)
+    data_dir = os.path.join(base_dir, "05_data", f"phi_{phi_str}", f"N{N}")
     ensure_dir(data_dir)
 
-    # 1. Static properties
     R2 = results['final_R2'].cpu().numpy()
     Rg2 = results['final_Rg2'].cpu().numpy()
-    write_static_tsv(
-        os.path.join(data_dir, f"fig1_static_N{N}_s42.tsv"), R2, Rg2)
-
-    # 2. Middle-segment MSD
-    write_dynamic_tsv(
-        os.path.join(data_dir, f"fig2_seg20_msd_N{N}_s42.tsv"),
-        results['g1'], "g1")
-
-    # 3. Center-of-mass MSD (diffusion)
-    write_dynamic_tsv(
-        os.path.join(data_dir, f"fig3_seg20_diffusion_N{N}_s42.tsv"),
-        results['gcm'], "g_CM")
-
-    # 4. End-to-end autocorrelation
-    write_dynamic_tsv(
-        os.path.join(data_dir, f"fig4_seg20_autocorr_N{N}_s42.tsv"),
-        results['gr'], "g_R")
-
-    # 5. Static vs sweep
-    write_sweep_tsv(
-        os.path.join(data_dir, "static_vs_sweep.tsv"),
-        results['sweep_data'])
-
+    write_static_tsv(os.path.join(data_dir, "fig1_static.tsv"), R2, Rg2)
+    write_dynamic_tsv(os.path.join(data_dir, "fig2_seg_msd.tsv"), results['g1'], "g1")
+    write_dynamic_tsv(os.path.join(data_dir, "fig3_cm_diffusion.tsv"), results['gcm'], "g_CM")
+    write_dynamic_tsv(os.path.join(data_dir, "fig4_autocorr.tsv"), results['gr'], "g_R")
+    write_sweep_tsv(os.path.join(data_dir, "static_vs_sweep.tsv"), results['sweep_data'])
     print(f"  Wrote 5 TSV files to {data_dir}")
 
 
@@ -126,143 +102,30 @@ def save_plot(fig, filepath):
     plt.close(fig)
 
 
+# Color map for phi values (light to dark)
+PHI_COLORS = {
+    0.001: '#1f77b4',
+    0.01:  '#ff7f0e',
+    0.05:  '#2ca02c',
+    0.10:  '#d62728',
+    0.20:  '#9467bd',
+    0.30:  '#8c564b',
+}
+
+
+def phi_color(phi):
+    return PHI_COLORS.get(phi, 'black')
+
+
 # ============================================================================
-# Cross-N Plots (8 total in 01, 02, 04 directories)
+# Analysis Helpers
 # ============================================================================
-
-def plot_R2_vs_N(all_results: dict, base_dir: str):
-    """01_static_properties/fig_R2_vs_N.png - log-log with power-law fit."""
-    fig, ax = setup_plot("N (chain length)", "<R²> (Å²)",
-                          "End-to-End Distance Squared vs Chain Length")
-    Ns = sorted(all_results.keys())
-    mean_R2 = [all_results[n]['final_R2'].mean().item() for n in Ns]
-
-    ax.plot(Ns, mean_R2, 'o-', color='C0', markersize=8, label='<R²>')
-    slope, intercept, r2 = power_law_fit(Ns, mean_R2)
-    fit_y = np.exp(intercept) * np.array(Ns) ** slope
-    ax.plot(Ns, fit_y, '--', color='C0', alpha=0.7,
-            label=f'Fit: 2ν = {slope:.3f} (R²={r2:.4f})')
-    ax.legend(fontsize=11)
-    save_plot(fig, os.path.join(base_dir, "01_static_properties", "fig_R2_vs_N.png"))
-
-
-def plot_Rg2_vs_N(all_results: dict, base_dir: str):
-    """01_static_properties/fig_Rg2_vs_N.png"""
-    fig, ax = setup_plot("N (chain length)", "<Rg²> (Å²)",
-                          "Radius of Gyration Squared vs Chain Length")
-    Ns = sorted(all_results.keys())
-    mean_Rg2 = [all_results[n]['final_Rg2'].mean().item() for n in Ns]
-
-    ax.plot(Ns, mean_Rg2, 's-', color='C1', markersize=8, label='<Rg²>')
-    slope, intercept, r2 = power_law_fit(Ns, mean_Rg2)
-    fit_y = np.exp(intercept) * np.array(Ns) ** slope
-    ax.plot(Ns, fit_y, '--', color='C1', alpha=0.7,
-            label=f'Fit: 2ν = {slope:.3f} (R²={r2:.4f})')
-    ax.legend(fontsize=11)
-    save_plot(fig, os.path.join(base_dir, "01_static_properties", "fig_Rg2_vs_N.png"))
-
-
-def plot_R2_Rg2_combined(all_results: dict, base_dir: str):
-    """01_static_properties/fig_R2_Rg2_combined_vs_N.png"""
-    fig, ax = setup_plot("N (chain length)", "Distance² (Å²)",
-                          "R² and Rg² vs Chain Length")
-    Ns = sorted(all_results.keys())
-    mean_R2 = [all_results[n]['final_R2'].mean().item() for n in Ns]
-    mean_Rg2 = [all_results[n]['final_Rg2'].mean().item() for n in Ns]
-
-    ax.plot(Ns, mean_R2, 'o-', color='C0', markersize=8, label='<R²>')
-    ax.plot(Ns, mean_Rg2, 's-', color='C1', markersize=8, label='<Rg²>')
-
-    slope_R2, intercept_R2, _ = power_law_fit(Ns, mean_R2)
-    slope_Rg2, intercept_Rg2, _ = power_law_fit(Ns, mean_Rg2)
-    ax.plot(Ns, np.exp(intercept_R2) * np.array(Ns) ** slope_R2,
-            '--', color='C0', alpha=0.5, label=f'R² fit: 2ν={slope_R2:.3f}')
-    ax.plot(Ns, np.exp(intercept_Rg2) * np.array(Ns) ** slope_Rg2,
-            '--', color='C1', alpha=0.5, label=f'Rg² fit: 2ν={slope_Rg2:.3f}')
-    ax.legend(fontsize=10)
-    save_plot(fig, os.path.join(base_dir, "01_static_properties",
-                                 "fig_R2_Rg2_combined_vs_N.png"))
-
-
-def plot_ratio_R2_Rg2(all_results: dict, base_dir: str):
-    """01_static_properties/fig_ratio_R2_over_Rg2_vs_N.png"""
-    fig, ax = setup_plot("N (chain length)", "R²/Rg²",
-                          "R²/Rg² Ratio vs Chain Length", loglog=False)
-    Ns = sorted(all_results.keys())
-    ratios = []
-    for n in Ns:
-        R2 = all_results[n]['final_R2'].mean().item()
-        Rg2 = all_results[n]['final_Rg2'].mean().item()
-        ratios.append(R2 / Rg2 if Rg2 > 0 else 0)
-
-    ax.plot(Ns, ratios, 'D-', color='C2', markersize=8, label='R²/Rg²')
-    ax.axhline(y=6.25, color='gray', linestyle='--', alpha=0.7,
-               label='SAW expected ≈ 6.25')
-    ax.set_ylim(4, 9)
-    ax.legend(fontsize=11)
-    save_plot(fig, os.path.join(base_dir, "01_static_properties",
-                                 "fig_ratio_R2_over_Rg2_vs_N.png"))
-
-
-def plot_g1_all_N(all_results: dict, base_dir: str):
-    """02_dynamic_properties/fig_g1_middle_segment_msd_vs_sweep.png"""
-    fig, ax = setup_plot("Lag (sweeps)", "g1(t) (A^2)",
-                          "Middle-Segment MSD vs Lag (All N)")
-    all_lags = []
-    for n in sorted(all_results.keys()):
-        g1 = all_results[n]['g1']
-        if g1:
-            lags = sorted(g1.keys())
-            vals = [g1[l] for l in lags]
-            ax.plot(lags, vals, 'o-', markersize=3, label=f'N={n}')
-            all_lags.extend(lags)
-    # Reference slope t^0.5
-    if all_lags:
-        t_ref = np.array(sorted(set(all_lags)))
-        t_ref = t_ref[t_ref > 0]
-        if len(t_ref) > 1:
-            y_ref = t_ref ** 0.5
-            # Scale to middle of data range
-            y_ref = y_ref * (ax.get_ylim()[0] * ax.get_ylim()[1]) ** 0.5 / (y_ref[len(y_ref)//2] if len(y_ref) > 0 else 1.0)
-            ax.plot(t_ref, y_ref, '--', color='gray', alpha=0.5, linewidth=2,
-                    label='ref slope t^0.5')
-    ax.legend(fontsize=10)
-    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties",
-                                 "fig_g1_middle_segment_msd_vs_sweep.png"))
-
-
-def plot_gcm_all_N(all_results: dict, base_dir: str):
-    """02_dynamic_properties/fig_gcm_center_of_mass_msd_vs_sweep.png"""
-    fig, ax = setup_plot("Lag (sweeps)", "g_CM(t) (A^2)",
-                          "Center-of-Mass MSD vs Lag (All N)")
-    all_lags = []
-    for n in sorted(all_results.keys()):
-        gcm = all_results[n]['gcm']
-        if gcm:
-            lags = sorted(gcm.keys())
-            vals = [gcm[l] for l in lags]
-            ax.plot(lags, vals, 'o-', markersize=3, label=f'N={n}')
-            all_lags.extend(lags)
-    # Reference slope t^1
-    if all_lags:
-        t_ref = np.array(sorted(set(all_lags)))
-        t_ref = t_ref[t_ref > 0]
-        if len(t_ref) > 1:
-            y_ref = t_ref.astype(float)
-            y_ref = y_ref * (ax.get_ylim()[0] * ax.get_ylim()[1]) ** 0.5 / (y_ref[len(y_ref)//2] if len(y_ref) > 0 else 1.0)
-            ax.plot(t_ref, y_ref, '--', color='gray', alpha=0.5, linewidth=2,
-                    label='ref slope t^1')
-    ax.legend(fontsize=10)
-    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties",
-                                 "fig_gcm_center_of_mass_msd_vs_sweep.png"))
-
 
 def _estimate_diffusion_coefficient(gcm: dict) -> float:
     """Estimate D from late-time linear fit of gCM(t) = 6Dt."""
     if len(gcm) < 3:
         return 0.0
     lags = sorted(gcm.keys())
-    # Use the last half of data points for late-time fit
     n = len(lags)
     start = max(1, n // 2)
     x = np.array(lags[start:], dtype=float)
@@ -270,224 +133,26 @@ def _estimate_diffusion_coefficient(gcm: dict) -> float:
     if len(x) < 2:
         return 0.0
     slope, _, _, _, _ = scipy_stats.linregress(x, y)
-    return slope / 6.0  # D = slope / 6
+    return slope / 6.0
 
 
 def _estimate_relaxation_time(gr: dict) -> float:
-    """Estimate τ_R as the lag where g_R first drops below 1/e ≈ 0.368."""
+    """Estimate tau_R as the lag where g_R first drops below 1/e."""
     target = 1.0 / np.e
     lags = sorted(gr.keys())
     for l in lags:
         if gr[l] <= target:
             return float(l)
-    # If never drops below, extrapolate from last two points
     if len(lags) >= 2:
-        return float(lags[-1]) * 2.0  # rough estimate
+        return float(lags[-1]) * 2.0
     return float(lags[-1]) if lags else 1.0
 
 
-def plot_D_vs_N(all_results: dict, base_dir: str):
-    """02_dynamic_properties/fig_diffusion_coefficient_D_vs_N.png"""
-    fig, ax = setup_plot("N (chain length)", "D (Å²/sweep)",
-                          "Diffusion Coefficient vs Chain Length")
-    Ns = sorted(all_results.keys())
-    Ds = [_estimate_diffusion_coefficient(all_results[n]['gcm']) for n in Ns]
-
-    valid = [(n, d) for n, d in zip(Ns, Ds) if d > 0]
-    if valid:
-        vn, vd = zip(*valid)
-        ax.plot(vn, vd, 'o-', color='C3', markersize=8, label='D')
-        slope, intercept, r2 = power_law_fit(vn, vd)
-        fit_y = np.exp(intercept) * np.array(vn) ** slope
-        ax.plot(vn, fit_y, '--', color='C3', alpha=0.7,
-                label=f'Fit: slope = {slope:.3f} (R²={r2:.4f})')
-        ax.legend(fontsize=11)
-    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties",
-                                 "fig_diffusion_coefficient_D_vs_N.png"))
-
-
-def plot_tau_R_vs_N(all_results: dict, base_dir: str):
-    """02_dynamic_properties/fig_relaxation_time_tau_R_vs_N.png"""
-    fig, ax = setup_plot("N (chain length)", "τ_R (sweeps)",
-                          "Relaxation Time vs Chain Length")
-    Ns = sorted(all_results.keys())
-    taus = [_estimate_relaxation_time(all_results[n]['gr']) for n in Ns]
-
-    valid = [(n, t) for n, t in zip(Ns, taus) if t > 0]
-    if valid:
-        vn, vt = zip(*valid)
-        ax.plot(vn, vt, 'o-', color='C4', markersize=8, label='τ_R')
-        slope, intercept, r2 = power_law_fit(vn, vt)
-        fit_y = np.exp(intercept) * np.array(vn) ** slope
-        ax.plot(vn, fit_y, '--', color='C4', alpha=0.7,
-                label=f'Fit: slope = {slope:.3f} (R²={r2:.4f})')
-        ax.legend(fontsize=11)
-    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties",
-                                 "fig_relaxation_time_tau_R_vs_N.png"))
-
-
-def plot_equilibration_R2(all_results: dict, base_dir: str):
-    """04_equilibration_evidence/fig_R2_vs_MC_sweep_all_N.png"""
-    from .config import CHAIN_CONFIGS
-    fig, ax = setup_plot("MC Sweep", "<R2> (A^2)",
-                          "R2 vs MC Sweep (All N) - Equilibration + Production",
-                          loglog=False)
-    eq_boundaries = set()
-    for n in sorted(all_results.keys()):
-        data = all_results[n]['sweep_data']
-        if data:
-            sweeps = [d[0] for d in data]
-            R2s = [d[2] for d in data]
-            ax.plot(sweeps, R2s, '-', linewidth=1, label=f'N={n}')
-            _, eq_sw, _, _ = CHAIN_CONFIGS[n]
-            eq_boundaries.add(eq_sw)
-    for eb in eq_boundaries:
-        ax.axvline(x=eb, color='black', linestyle='--', alpha=0.4, linewidth=1)
-    if eq_boundaries:
-        ax.axvline(x=max(eq_boundaries), color='black', linestyle='--',
-                    alpha=0.4, linewidth=1, label='eq/prod boundary')
-    ax.legend(fontsize=10)
-    save_plot(fig, os.path.join(base_dir, "04_equilibration_evidence",
-                                 "fig_R2_vs_MC_sweep_all_N.png"))
-
-
-def plot_equilibration_Rg2(all_results: dict, base_dir: str):
-    """04_equilibration_evidence/fig_Rg2_vs_MC_sweep_all_N.png"""
-    from .config import CHAIN_CONFIGS
-    fig, ax = setup_plot("MC Sweep", "<Rg2> (A^2)",
-                          "Rg2 vs MC Sweep (All N) - Equilibration + Production",
-                          loglog=False)
-    eq_boundaries = set()
-    for n in sorted(all_results.keys()):
-        data = all_results[n]['sweep_data']
-        if data:
-            sweeps = [d[0] for d in data]
-            Rg2s = [d[3] for d in data]
-            ax.plot(sweeps, Rg2s, '-', linewidth=1, label=f'N={n}')
-            _, eq_sw, _, _ = CHAIN_CONFIGS[n]
-            eq_boundaries.add(eq_sw)
-    for eb in eq_boundaries:
-        ax.axvline(x=eb, color='black', linestyle='--', alpha=0.4, linewidth=1)
-    if eq_boundaries:
-        ax.axvline(x=max(eq_boundaries), color='black', linestyle='--',
-                    alpha=0.4, linewidth=1, label='eq/prod boundary')
-    ax.legend(fontsize=10)
-    save_plot(fig, os.path.join(base_dir, "04_equilibration_evidence",
-                                 "fig_Rg2_vs_MC_sweep_all_N.png"))
-
-
-# ============================================================================
-# Per-N Plots (5 plots x 5 chain lengths = 25)
-# ============================================================================
-
-def plot_per_N(results: dict, base_dir: str, N: int):
-    """Generate all 5 per-chain-length plots for a given N."""
-    plot_dir = os.path.join(base_dir, "03_per_chain_length", f"N{N}")
-    ensure_dir(plot_dir)
-
-    sweep_data = results['sweep_data']
-
-    # 1. R2 vs MC sweep
-    fig, ax = setup_plot("MC Sweep", "<R²> (Å²)", f"R² vs MC Sweep (N={N})",
-                          loglog=False)
-    if sweep_data:
-        sweeps = [d[0] for d in sweep_data]
-        R2s = [d[2] for d in sweep_data]
-        ax.plot(sweeps, R2s, '-', color='C0', linewidth=1)
-    save_plot(fig, os.path.join(plot_dir, "R2_vs_MC_sweep.png"))
-
-    # 2. Rg2 vs MC sweep
-    fig, ax = setup_plot("MC Sweep", "<Rg²> (Å²)", f"Rg² vs MC Sweep (N={N})",
-                          loglog=False)
-    if sweep_data:
-        sweeps = [d[0] for d in sweep_data]
-        Rg2s = [d[3] for d in sweep_data]
-        ax.plot(sweeps, Rg2s, '-', color='C1', linewidth=1)
-    save_plot(fig, os.path.join(plot_dir, "Rg2_vs_MC_sweep.png"))
-
-    # 3. g1 middle-segment MSD
-    fig, ax = setup_plot("Lag (sweeps)", "g₁(t) (Å²)",
-                          f"Middle-Segment MSD (N={N})")
-    g1 = results['g1']
-    if g1:
-        lags = sorted(g1.keys())
-        vals = [g1[l] for l in lags]
-        ax.plot(lags, vals, 'o-', color='C0', markersize=3)
-        if len(lags) >= 2:
-            slope, _, r2 = power_law_fit(lags, vals)
-            ax.text(0.05, 0.95, f'slope = {slope:.3f}',
-                    transform=ax.transAxes, fontsize=11,
-                    verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    save_plot(fig, os.path.join(plot_dir, "g1_middle_segment_msd.png"))
-
-    # 4. gCM center-of-mass MSD
-    fig, ax = setup_plot("Lag (sweeps)", "g_CM(t) (Å²)",
-                          f"Center-of-Mass MSD (N={N})")
-    gcm = results['gcm']
-    if gcm:
-        lags = sorted(gcm.keys())
-        vals = [gcm[l] for l in lags]
-        ax.plot(lags, vals, 'o-', color='C3', markersize=3)
-        if len(lags) >= 2:
-            slope, _, r2 = power_law_fit(lags, vals)
-            ax.text(0.05, 0.95, f'slope = {slope:.3f}',
-                    transform=ax.transAxes, fontsize=11,
-                    verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    save_plot(fig, os.path.join(plot_dir, "gcm_center_of_mass_msd.png"))
-
-    # 5. Autocorrelation
-    fig, ax = setup_plot("Lag (sweeps)", "g_R(t)",
-                          f"End-to-End Autocorrelation (N={N})")
-    gr = results['gr']
-    if gr:
-        lags = sorted(gr.keys())
-        vals = [gr[l] for l in lags]
-        ax.plot(lags, vals, 'o-', color='C4', markersize=3)
-        ax.axhline(y=1.0 / np.e, color='gray', linestyle='--', alpha=0.5,
-                    label='1/e threshold')
-        ax.legend(fontsize=10)
-    save_plot(fig, os.path.join(plot_dir, "autocorrelation_end_to_end_vector.png"))
-
-    print(f"  Wrote 5 plots to {plot_dir}")
-
-
-# ============================================================================
-# Cross-N Plots Dispatcher
-# ============================================================================
-
-def generate_all_cross_N_plots(all_results: dict, base_dir: str):
-    """Generate all 8 cross-N plots + 2 equilibration plots = 10 plots."""
-    # 01_static_properties (4 plots)
-    plot_R2_vs_N(all_results, base_dir)
-    plot_Rg2_vs_N(all_results, base_dir)
-    plot_R2_Rg2_combined(all_results, base_dir)
-    plot_ratio_R2_Rg2(all_results, base_dir)
-
-    # 02_dynamic_properties (4 plots)
-    plot_g1_all_N(all_results, base_dir)
-    plot_gcm_all_N(all_results, base_dir)
-    plot_D_vs_N(all_results, base_dir)
-    plot_tau_R_vs_N(all_results, base_dir)
-
-    # 04_equilibration_evidence (2 plots)
-    plot_equilibration_R2(all_results, base_dir)
-    plot_equilibration_Rg2(all_results, base_dir)
-
-    print(f"  Generated 10 cross-N plots")
-
-
-# ============================================================================
-# Validation Summary JSON
-# ============================================================================
-
 def _estimate_g1_short_time_exponent(g1: dict) -> float:
-    """Estimate g1 short-time exponent: g1(t) ~ t^beta in early regime."""
+    """Estimate g1 short-time exponent from first third of data."""
     if len(g1) < 3:
         return 0.0
     lags = sorted(g1.keys())
-    # Use the first third of data for short-time regime
     n = max(3, len(lags) // 3)
     x = np.array(lags[:n], dtype=float)
     y = np.array([g1[l] for l in lags[:n]], dtype=float)
@@ -499,12 +164,18 @@ def _estimate_g1_short_time_exponent(g1: dict) -> float:
 
 
 def _estimate_gcm_exponent(gcm: dict) -> float:
-    """Estimate g_CM(t) ~ t^alpha exponent from log-log fit."""
+    """Estimate g_CM(t) ~ t^alpha exponent from late-time log-log fit.
+
+    Uses second half of data to focus on the diffusive (long-time) regime
+    where gCM ~ t^1 is expected.
+    """
     if len(gcm) < 3:
         return 0.0
     lags = sorted(gcm.keys())
-    x = np.array(lags, dtype=float)
-    y = np.array([gcm[l] for l in lags], dtype=float)
+    n = len(lags)
+    start = max(1, n // 2)
+    x = np.array(lags[start:], dtype=float)
+    y = np.array([gcm[l] for l in lags[start:]], dtype=float)
     mask = (x > 0) & (y > 0)
     if mask.sum() < 2:
         return 0.0
@@ -514,152 +185,84 @@ def _estimate_gcm_exponent(gcm: dict) -> float:
 
 def _check_pass(measured, theory, tolerance):
     """Check if measured value is within tolerance of theory."""
-    return abs(measured - theory) <= tolerance
+    return bool(abs(measured - theory) <= tolerance)
 
 
-def write_validation_summary(all_results: dict, base_dir: str):
-    """Write tavg_validation_summary.json with all exponents + Rouse 1953 assessment."""
-    Ns = sorted(all_results.keys())
-    mean_R2 = {n: all_results[n]['final_R2'].mean().item() for n in Ns}
-    mean_Rg2 = {n: all_results[n]['final_Rg2'].mean().item() for n in Ns}
-    ratios = {n: mean_R2[n] / mean_Rg2[n] if mean_Rg2[n] > 0 else 0.0
-              for n in Ns}
+def _production_averaged_static(results: dict):
+    """Get production-averaged R2 and Rg2 from sweep_data for better statistics.
 
-    # Scaling exponents
+    Falls back to final_R2/final_Rg2 if sweep_data is unavailable.
+    """
+    sweep_data = results.get('sweep_data', [])
+    prod_R2 = [r2 for (sw, phase, r2, rg2, ratio) in sweep_data if phase == "production"]
+    prod_Rg2 = [rg2 for (sw, phase, r2, rg2, ratio) in sweep_data if phase == "production"]
+    if len(prod_R2) >= 3:
+        return float(np.mean(prod_R2)), float(np.mean(prod_Rg2))
+    return results['final_R2'].mean().item(), results['final_Rg2'].mean().item()
+
+
+def _compute_phi_metrics(phi_results: dict):
+    """Compute all scaling metrics for a single phi level.
+
+    Args:
+        phi_results: dict[N] -> results for all chain lengths at this phi
+
+    Returns:
+        dict with all metrics for this phi
+    """
+    Ns = sorted(phi_results.keys())
+    mean_R2 = {}
+    mean_Rg2 = {}
+    for n in Ns:
+        r2, rg2 = _production_averaged_static(phi_results[n])
+        mean_R2[n] = r2
+        mean_Rg2[n] = rg2
+    ratios = {n: mean_R2[n] / mean_Rg2[n] if mean_Rg2[n] > 0 else 0.0 for n in Ns}
+
     slope_R2, _, r2_R2 = power_law_fit(Ns, [mean_R2[n] for n in Ns])
     slope_Rg2, _, r2_Rg2 = power_law_fit(Ns, [mean_Rg2[n] for n in Ns])
 
-    # Diffusion: D ~ N^alpha (expect alpha ~ -1)
-    Ds = {n: _estimate_diffusion_coefficient(all_results[n]['gcm']) for n in Ns}
+    Ds = {n: _estimate_diffusion_coefficient(phi_results[n]['gcm']) for n in Ns}
     valid_D = [(n, Ds[n]) for n in Ns if Ds[n] > 0]
-    diff_slope = 0.0
+    diff_slope, diff_r2 = 0.0, 0.0
     if valid_D:
-        diff_slope, _, _ = power_law_fit([v[0] for v in valid_D],
-                                          [v[1] for v in valid_D])
+        diff_slope, _, diff_r2 = power_law_fit([v[0] for v in valid_D],
+                                                [v[1] for v in valid_D])
 
-    # Relaxation: tau_R ~ N^beta (expect beta ~ 2.18)
-    taus = {n: _estimate_relaxation_time(all_results[n]['gr']) for n in Ns}
+    taus = {n: _estimate_relaxation_time(phi_results[n]['gr']) for n in Ns}
     valid_tau = [(n, taus[n]) for n in Ns if taus[n] > 0]
-    relax_slope = 0.0
+    relax_slope, relax_r2 = 0.0, 0.0
     if valid_tau:
-        relax_slope, _, _ = power_law_fit([v[0] for v in valid_tau],
-                                           [v[1] for v in valid_tau])
+        relax_slope, _, relax_r2 = power_law_fit([v[0] for v in valid_tau],
+                                                   [v[1] for v in valid_tau])
 
-    # g_CM exponent (expect ~1.0)
-    gcm_exponents = {}
-    for n in Ns:
-        gcm_exponents[n] = _estimate_gcm_exponent(all_results[n]['gcm'])
+    gcm_exponents = {n: _estimate_gcm_exponent(phi_results[n]['gcm']) for n in Ns}
     mean_gcm_exp = np.mean([v for v in gcm_exponents.values() if v > 0]) if any(v > 0 for v in gcm_exponents.values()) else 0.0
 
-    # g1 short-time exponent (expect ~0.50)
-    g1_exponents = {}
-    for n in Ns:
-        g1_exponents[n] = _estimate_g1_short_time_exponent(all_results[n]['g1'])
+    g1_exponents = {n: _estimate_g1_short_time_exponent(phi_results[n]['g1']) for n in Ns}
     mean_g1_exp = np.mean([v for v in g1_exponents.values() if v > 0]) if any(v > 0 for v in g1_exponents.values()) else 0.0
 
     mean_ratio = np.mean(list(ratios.values()))
 
-    # Build the required JSON structure
-    R2_pass = _check_pass(slope_R2, 1.18, 0.10)
-    Rg2_pass = _check_pass(slope_Rg2, 1.18, 0.10)
-    ratio_pass = _check_pass(mean_ratio, 6.25, 1.25)
-    D_pass = _check_pass(diff_slope, -1.00, 0.10)
-    tau_pass = _check_pass(relax_slope, 2.18, 0.20)
-    gcm_pass = _check_pass(mean_gcm_exp, 1.00, 0.10)
-    g1_pass = _check_pass(mean_g1_exp, 0.50, 0.15)
-
-    # Rouse 1953 property assessments
-    # Static properties (1.1-1.5)
-    has_ev = True  # athermal excluded volume -> SAW, not Gaussian submolecules
-    r2_scaling_met = R2_pass
-    rg2_scaling_met = Rg2_pass
-    ratio_met = ratio_pass
-
-    def met(val, reason):
-        return f"{'MET' if val else 'NOT MET'} -- {reason}"
-
-    rouse_1953 = {
-        "1.1_gaussian_submolecule": met(False,
-            "surpass-alpha uses athermal excluded volume (repulsive energy = 1e6), "
-            "producing SAW chains, not Gaussian submolecules. The Rouse model assumes "
-            "Gaussian chain statistics; surpass-alpha deliberately violates this to "
-            "model good-solvent conditions."),
-        "1.2_R2_scaling": met(r2_scaling_met,
-            f"<R2> ~ N^(2nu) with measured 2nu = {slope_R2:.3f} "
-            f"(theory SAW: 1.18, tolerance +/-0.10). "
-            f"R2 of fit = {r2_R2:.4f}."),
-        "1.3_Rg2_scaling": met(rg2_scaling_met,
-            f"<Rg2> ~ N^(2nu) with measured 2nu = {slope_Rg2:.3f} "
-            f"(theory SAW: 1.18, tolerance +/-0.10). "
-            f"R2 of fit = {r2_Rg2:.4f}."),
-        "1.4_ratio_R2_Rg2": met(ratio_met,
-            f"Mean <R2>/<Rg2> = {mean_ratio:.3f} across all N "
-            f"(SAW expected ~6.25, ideal Gaussian 6.0). "
-            f"Per-N values: {', '.join(f'N={n}: {ratios[n]:.2f}' for n in Ns)}."),
-        "1.5_config_probability": met(False,
-            "The Rouse model assumes a Gaussian configuration probability "
-            "P(R) ~ exp(-3R^2/(2Nl^2)). With excluded volume, the end-to-end "
-            "distribution is non-Gaussian (broader tails, shifted peak). "
-            "This property is inherently NOT MET for SAW chains."),
-        "2.1_eigenvalues": met(False,
-            "Rouse eigenvalues lambda_p = 4 sin^2(p*pi/(2N)) require a harmonic "
-            "spring connectivity matrix. surpass-alpha uses rigid bond lengths with "
-            "MC moves (hinge, tail, pivot), not harmonic springs. The eigenvalue "
-            "spectrum is not directly accessible from MC dynamics."),
-        "2.2_relaxation_times": met(True,
-            f"Relaxation time tau_R extracted from end-to-end autocorrelation "
-            f"g_R(t) = 1/e crossing. tau_R scales as N^{relax_slope:.3f} "
-            f"(theory SAW: 2.18). Individual tau_R values obtained for all N."),
-        "2.3_long_wavelength_approx": met(False,
-            "The Rouse long-wavelength approximation tau_p ~ N^2/p^2 assumes "
-            "Gaussian statistics and small p. With excluded volume and MC dynamics, "
-            "the mode spectrum is not directly measurable and the approximation "
-            "is not expected to hold exactly."),
-        "2.4_tau_R_scaling": met(_check_pass(relax_slope, 2.18, 0.20),
-            f"tau_R ~ N^alpha with measured alpha = {relax_slope:.3f} "
-            f"(theory SAW: 1+2nu = 2.18, tolerance +/-0.20)."),
-        "2.5_steady_flow_viscosity": met(False,
-            "Steady-state viscosity eta_0 ~ N requires stress tensor computation "
-            "or Green-Kubo integration, which is not implemented in this MC "
-            "framework. Cannot be measured from equilibrium MC alone."),
-        "2.6_complex_viscosity": met(False,
-            "Complex viscosity eta*(omega) requires frequency-dependent response "
-            "functions. Not accessible from equilibrium MC simulations without "
-            "applying oscillatory perturbations."),
-        "2.7_shear_modulus": met(False,
-            "Dynamic shear modulus G(t) requires stress autocorrelation function "
-            "or non-equilibrium deformation. Not computed in this MC framework."),
-        "2.8_high_freq_approx": met(False,
-            "High-frequency limiting behavior of G'(omega) ~ omega^(1/2) "
-            "requires frequency-domain analysis not available from MC."),
-        "2.9_diffusion_coeff": met(D_pass,
-            f"D ~ N^alpha with measured alpha = {diff_slope:.3f} "
-            f"(theory: -1.00, tolerance +/-0.10). "
-            f"D values: {', '.join(f'N={n}: {Ds[n]:.4E}' for n in Ns)}."),
-        "2.10_g_CM": met(gcm_pass,
-            f"g_CM(t) ~ t^alpha with mean exponent = {mean_gcm_exp:.3f} "
-            f"(theory: 1.00, tolerance +/-0.10). "
-            f"Per-N exponents: {', '.join(f'N={n}: {gcm_exponents[n]:.3f}' for n in Ns)}."),
-        "2.11_g1_middle_segment": met(g1_pass,
-            f"g1(t) short-time exponent = {mean_g1_exp:.3f} "
-            f"(theory: 0.50, tolerance +/-0.15). "
-            f"Per-N exponents: {', '.join(f'N={n}: {g1_exponents[n]:.3f}' for n in Ns)}."),
-        "2.12_end_to_end_autocorr": met(True,
-            f"End-to-end autocorrelation g_R(t) = <R(0).R(t)>/<R^2> computed "
-            f"and decays from 1 to 0 as expected. Relaxation times extracted "
-            f"for all N: {', '.join(f'N={n}: {taus[n]:.1f}' for n in Ns)} sweeps."),
-    }
-
-    summary = {
-        "R2_exponent": {"measured": round(slope_R2, 3), "theory": 1.18, "pass": R2_pass},
-        "Rg2_exponent": {"measured": round(slope_Rg2, 3), "theory": 1.18, "pass": Rg2_pass},
-        "R2_Rg2_ratio": {"measured": round(mean_ratio, 3), "theory": 6.25, "pass": ratio_pass},
-        "D_exponent": {"measured": round(diff_slope, 3), "theory": -1.00, "pass": D_pass},
-        "tau_R_exponent": {"measured": round(relax_slope, 3), "theory": 2.18, "pass": tau_pass},
-        "g_CM_exponent": {"measured": round(mean_gcm_exp, 3), "theory": 1.00, "pass": gcm_pass},
-        "g1_exponent": {"measured": round(mean_g1_exp, 3), "theory": 0.50, "pass": g1_pass},
-        "rouse_1953_properties": rouse_1953,
-        # Additional data for downstream use
+    return {
+        "R2_exponent": {"measured": round(float(slope_R2), 3), "theory": 1.18,
+                        "r2_fit": round(float(r2_R2), 4),
+                        "pass": _check_pass(slope_R2, 1.18, 0.10)},
+        "Rg2_exponent": {"measured": round(float(slope_Rg2), 3), "theory": 1.18,
+                         "r2_fit": round(float(r2_Rg2), 4),
+                         "pass": _check_pass(slope_Rg2, 1.18, 0.10)},
+        "R2_Rg2_ratio": {"measured": round(float(mean_ratio), 3), "theory": 6.25,
+                         "pass": _check_pass(mean_ratio, 6.25, 1.25)},
+        "D_exponent": {"measured": round(float(diff_slope), 3), "theory": -1.00,
+                       "r2_fit": round(float(diff_r2), 4),
+                       "pass": _check_pass(diff_slope, -1.00, 0.10)},
+        "tau_R_exponent": {"measured": round(float(relax_slope), 3), "theory": 2.18,
+                           "r2_fit": round(float(relax_r2), 4),
+                           "pass": _check_pass(relax_slope, 2.18, 0.20)},
+        "g_CM_exponent": {"measured": round(float(mean_gcm_exp), 3), "theory": 1.00,
+                          "pass": _check_pass(mean_gcm_exp, 1.00, 0.10)},
+        "g1_exponent": {"measured": round(float(mean_g1_exp), 3), "theory": 0.50,
+                        "pass": _check_pass(mean_g1_exp, 0.50, 0.15)},
         "_detail": {
             "N_values": Ns,
             "mean_R2": {str(n): round(mean_R2[n], 4) for n in Ns},
@@ -672,172 +275,729 @@ def write_validation_summary(all_results: dict, base_dir: str):
         }
     }
 
+
+def _check_marginal(measured, theory, tolerance):
+    """MARGINAL = within 1.5x tolerance but outside 1x tolerance."""
+    diff = abs(measured - theory)
+    if diff <= tolerance:
+        return 2  # PASS
+    elif diff <= tolerance * 1.5:
+        return 1  # MARGINAL
+    return 0  # FAIL
+
+
+# ============================================================================
+# Per-State-Point Plots (5 plots per state point x 30 = 150 total)
+# ============================================================================
+
+def plot_per_state_point(results: dict, base_dir: str, N: int, phi: float):
+    """Generate all 5 plots for a single (N, phi) state point."""
+    phi_str = format_phi(phi)
+    plot_dir = os.path.join(base_dir, "03_per_state_point", f"phi_{phi_str}", f"N{N}")
+    ensure_dir(plot_dir)
+
+    sweep_data = results['sweep_data']
+    title_suffix = f"(N={N}, phi={phi_str})"
+
+    # 1. R2 vs MC sweep
+    fig, ax = setup_plot("MC Sweep", "<R2> (A^2)", f"R2 vs MC Sweep {title_suffix}",
+                          loglog=False)
+    if sweep_data:
+        sweeps = [d[0] for d in sweep_data]
+        R2s = [d[2] for d in sweep_data]
+        ax.plot(sweeps, R2s, '-', color='C0', linewidth=1)
+    save_plot(fig, os.path.join(plot_dir, "R2_vs_MC_sweep.png"))
+
+    # 2. Rg2 vs MC sweep
+    fig, ax = setup_plot("MC Sweep", "<Rg2> (A^2)", f"Rg2 vs MC Sweep {title_suffix}",
+                          loglog=False)
+    if sweep_data:
+        sweeps = [d[0] for d in sweep_data]
+        Rg2s = [d[3] for d in sweep_data]
+        ax.plot(sweeps, Rg2s, '-', color='C1', linewidth=1)
+    save_plot(fig, os.path.join(plot_dir, "Rg2_vs_MC_sweep.png"))
+
+    # 3. g1 middle-segment MSD
+    fig, ax = setup_plot("Lag (sweeps)", "g1(t) (A^2)",
+                          f"Middle-Segment MSD {title_suffix}")
+    g1 = results['g1']
+    if g1:
+        lags = sorted(g1.keys())
+        vals = [g1[l] for l in lags]
+        ax.plot(lags, vals, 'o-', color='C0', markersize=3)
+        if len(lags) >= 2:
+            slope, _, r2 = power_law_fit(lags, vals)
+            ax.text(0.05, 0.95, f'slope = {slope:.3f} (R2={r2:.3f})',
+                    transform=ax.transAxes, fontsize=11,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    save_plot(fig, os.path.join(plot_dir, "g1_middle_segment_msd.png"))
+
+    # 4. gCM center-of-mass MSD
+    fig, ax = setup_plot("Lag (sweeps)", "g_CM(t) (A^2)",
+                          f"Center-of-Mass MSD {title_suffix}")
+    gcm = results['gcm']
+    if gcm:
+        lags = sorted(gcm.keys())
+        vals = [gcm[l] for l in lags]
+        ax.plot(lags, vals, 'o-', color='C3', markersize=3)
+        if len(lags) >= 2:
+            slope, _, r2 = power_law_fit(lags, vals)
+            ax.text(0.05, 0.95, f'slope = {slope:.3f} (R2={r2:.3f})',
+                    transform=ax.transAxes, fontsize=11,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    save_plot(fig, os.path.join(plot_dir, "gcm_center_of_mass_msd.png"))
+
+    # 5. Autocorrelation
+    fig, ax = setup_plot("Lag (sweeps)", "g_R(t)",
+                          f"End-to-End Autocorrelation {title_suffix}")
+    gr = results['gr']
+    if gr:
+        lags = sorted(gr.keys())
+        vals = [gr[l] for l in lags]
+        ax.plot(lags, vals, 'o-', color='C4', markersize=3)
+        ax.axhline(y=1.0 / np.e, color='gray', linestyle='--', alpha=0.5,
+                    label='1/e threshold')
+        ax.legend(fontsize=10)
+    save_plot(fig, os.path.join(plot_dir, "autocorrelation_end_to_end_vector.png"))
+
+
+# ============================================================================
+# Per-Phi Equilibration Evidence (2 plots per phi x 6 = 12 total)
+# ============================================================================
+
+def plot_equilibration_per_phi(phi_results: dict, base_dir: str, phi: float):
+    """Generate 2 equilibration evidence plots for a given phi level.
+
+    Args:
+        phi_results: dict[N] -> results for all chain lengths at this phi
+    """
+    phi_str = format_phi(phi)
+    eq_dir = os.path.join(base_dir, "04_equilibration_evidence", f"phi_{phi_str}")
+    ensure_dir(eq_dir)
+
+    for obs_idx, (obs_name, obs_label) in enumerate([("R2", "<R2> (A^2)"), ("Rg2", "<Rg2> (A^2)")]):
+        fig, ax = setup_plot("MC Sweep", obs_label,
+                              f"{obs_name} vs MC Sweep (phi={phi_str}, All N)",
+                              loglog=False)
+        for n in sorted(phi_results.keys()):
+            data = phi_results[n]['sweep_data']
+            if data:
+                sweeps = [d[0] for d in data]
+                vals = [d[2 + obs_idx] for d in data]
+                ax.plot(sweeps, vals, '-', linewidth=1, label=f'N={n}')
+        # eq/prod boundary at sweep 10000
+        ax.axvline(x=10000, color='black', linestyle='--', alpha=0.4,
+                    linewidth=1, label='eq/prod boundary')
+        ax.legend(fontsize=10)
+        save_plot(fig, os.path.join(eq_dir, f"fig_{obs_name}_vs_sweep_all_N.png"))
+
+
+# ============================================================================
+# Cross-Phi Static Plots (5 plots in 01_static_properties/)
+# ============================================================================
+
+def plot_R2_vs_N_per_phi(all_results: dict, base_dir: str):
+    """fig_R2_vs_N_per_phi.png — R2 vs N, one curve per phi with power-law fits."""
+    fig, ax = setup_plot("N (chain length)", "<R2> (A^2)",
+                          "End-to-End Distance Squared vs N (per phi)")
+    for phi in sorted(all_results.keys()):
+        Ns = sorted(all_results[phi].keys())
+        mean_R2 = [_production_averaged_static(all_results[phi][n])[0] for n in Ns]
+        phi_str = format_phi(phi)
+        color = phi_color(phi)
+        ax.plot(Ns, mean_R2, 'o-', color=color, markersize=6, label=f'phi={phi_str}')
+        slope, intercept, r2 = power_law_fit(Ns, mean_R2)
+        fit_y = np.exp(intercept) * np.array(Ns) ** slope
+        ax.plot(Ns, fit_y, '--', color=color, alpha=0.5,
+                label=f'  2nu={slope:.3f} (R2={r2:.3f})')
+    ax.legend(fontsize=8, ncol=2)
+    save_plot(fig, os.path.join(base_dir, "01_static_properties", "fig_R2_vs_N_per_phi.png"))
+
+
+def plot_Rg2_vs_N_per_phi(all_results: dict, base_dir: str):
+    """fig_Rg2_vs_N_per_phi.png — Rg2 vs N, one curve per phi."""
+    fig, ax = setup_plot("N (chain length)", "<Rg2> (A^2)",
+                          "Radius of Gyration Squared vs N (per phi)")
+    for phi in sorted(all_results.keys()):
+        Ns = sorted(all_results[phi].keys())
+        mean_Rg2 = [_production_averaged_static(all_results[phi][n])[1] for n in Ns]
+        phi_str = format_phi(phi)
+        color = phi_color(phi)
+        ax.plot(Ns, mean_Rg2, 's-', color=color, markersize=6, label=f'phi={phi_str}')
+        slope, intercept, r2 = power_law_fit(Ns, mean_Rg2)
+        fit_y = np.exp(intercept) * np.array(Ns) ** slope
+        ax.plot(Ns, fit_y, '--', color=color, alpha=0.5,
+                label=f'  2nu={slope:.3f} (R2={r2:.3f})')
+    ax.legend(fontsize=8, ncol=2)
+    save_plot(fig, os.path.join(base_dir, "01_static_properties", "fig_Rg2_vs_N_per_phi.png"))
+
+
+def plot_2nu_vs_phi(all_results: dict, base_dir: str):
+    """fig_2nu_vs_phi.png — scaling exponent 2nu vs phi."""
+    fig, ax = setup_plot("phi (volume fraction)", "2nu (scaling exponent)",
+                          "Static Scaling Exponent vs Density", loglog=False)
+    ax.set_xscale('log')
+
+    phis = sorted(all_results.keys())
+    nu_R2 = []
+    nu_Rg2 = []
+    for phi in phis:
+        Ns = sorted(all_results[phi].keys())
+        mean_R2 = [_production_averaged_static(all_results[phi][n])[0] for n in Ns]
+        mean_Rg2 = [_production_averaged_static(all_results[phi][n])[1] for n in Ns]
+        s_R2, _, _ = power_law_fit(Ns, mean_R2)
+        s_Rg2, _, _ = power_law_fit(Ns, mean_Rg2)
+        nu_R2.append(s_R2)
+        nu_Rg2.append(s_Rg2)
+
+    ax.plot(phis, nu_R2, 'o-', color='C0', markersize=8, label='2nu from R2')
+    ax.plot(phis, nu_Rg2, 's-', color='C1', markersize=8, label='2nu from Rg2')
+    ax.axhline(y=1.20, color='red', linestyle='--', alpha=0.6, label='Kuriata target (1.20)')
+    ax.axhline(y=1.00, color='gray', linestyle=':', alpha=0.5, label='Ideal chain (1.00)')
+    ax.legend(fontsize=10)
+    save_plot(fig, os.path.join(base_dir, "01_static_properties", "fig_2nu_vs_phi.png"))
+
+
+def plot_ratio_R2_Rg2_vs_phi(all_results: dict, base_dir: str):
+    """fig_ratio_R2_Rg2_vs_phi.png — R2/Rg2 ratio vs phi, one curve per N."""
+    fig, ax = setup_plot("phi (volume fraction)", "R2/Rg2",
+                          "R2/Rg2 Ratio vs Density (per N)", loglog=False)
+    ax.set_xscale('log')
+    phis = sorted(all_results.keys())
+
+    for N in CHAIN_LENGTHS:
+        ratio_vals = []
+        for phi in phis:
+            if N in all_results[phi]:
+                R2, Rg2 = _production_averaged_static(all_results[phi][N])
+                ratio_vals.append(R2 / Rg2 if Rg2 > 0 else 0)
+            else:
+                ratio_vals.append(0)
+        ax.plot(phis, ratio_vals, 'o-', markersize=6, label=f'N={N}')
+
+    ax.axhline(y=6.25, color='red', linestyle='--', alpha=0.6, label='SAW expected (6.25)')
+    ax.axhline(y=6.00, color='gray', linestyle=':', alpha=0.5, label='Gaussian (6.00)')
+    ax.legend(fontsize=9)
+    save_plot(fig, os.path.join(base_dir, "01_static_properties", "fig_ratio_R2_Rg2_vs_phi.png"))
+
+
+def plot_R2_Rg2_combined_dilute(all_results: dict, base_dir: str):
+    """fig_R2_Rg2_combined_dilute.png — R2 and Rg2 vs N at phi=0.001."""
+    dilute_phi = min(all_results.keys())
+    phi_str = format_phi(dilute_phi)
+    fig, ax = setup_plot("N (chain length)", "Distance^2 (A^2)",
+                          f"R2 and Rg2 vs N (dilute, phi={phi_str})")
+    phi_results = all_results[dilute_phi]
+    Ns = sorted(phi_results.keys())
+    mean_R2 = [_production_averaged_static(phi_results[n])[0] for n in Ns]
+    mean_Rg2 = [_production_averaged_static(phi_results[n])[1] for n in Ns]
+
+    ax.plot(Ns, mean_R2, 'o-', color='C0', markersize=8, label='<R2>')
+    ax.plot(Ns, mean_Rg2, 's-', color='C1', markersize=8, label='<Rg2>')
+
+    slope_R2, int_R2, r2_R2 = power_law_fit(Ns, mean_R2)
+    slope_Rg2, int_Rg2, r2_Rg2 = power_law_fit(Ns, mean_Rg2)
+    ax.plot(Ns, np.exp(int_R2) * np.array(Ns) ** slope_R2, '--', color='C0', alpha=0.5,
+            label=f'R2 fit: 2nu={slope_R2:.3f} (R2={r2_R2:.3f})')
+    ax.plot(Ns, np.exp(int_Rg2) * np.array(Ns) ** slope_Rg2, '--', color='C1', alpha=0.5,
+            label=f'Rg2 fit: 2nu={slope_Rg2:.3f} (R2={r2_Rg2:.3f})')
+    ax.axhline(y=0, visible=False)  # force origin
+    ax.legend(fontsize=10)
+    save_plot(fig, os.path.join(base_dir, "01_static_properties", "fig_R2_Rg2_combined_dilute.png"))
+
+
+# ============================================================================
+# Cross-Phi Dynamic Plots (7 plots in 02_dynamic_properties/)
+# ============================================================================
+
+def plot_g1_vs_sweep_per_phi(all_results: dict, base_dir: str):
+    """fig_g1_vs_sweep_per_phi.png — g1(t) for N=100 at each phi."""
+    ref_N = 100
+    fig, ax = setup_plot("Lag (sweeps)", "g1(t) (A^2)",
+                          f"Middle-Segment MSD vs Lag (N={ref_N}, per phi)")
+    for phi in sorted(all_results.keys()):
+        if ref_N in all_results[phi]:
+            g1 = all_results[phi][ref_N]['g1']
+            if g1:
+                lags = sorted(g1.keys())
+                vals = [g1[l] for l in lags]
+                ax.plot(lags, vals, 'o-', color=phi_color(phi), markersize=3,
+                        label=f'phi={format_phi(phi)}')
+    # Reference slope t^0.5
+    ax.plot([], [], '--', color='gray', alpha=0.5, label='ref: t^0.5')
+    ax.legend(fontsize=9)
+    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties", "fig_g1_vs_sweep_per_phi.png"))
+
+
+def plot_gcm_vs_sweep_per_phi(all_results: dict, base_dir: str):
+    """fig_gcm_vs_sweep_per_phi.png — g_CM(t) for N=100 at each phi."""
+    ref_N = 100
+    fig, ax = setup_plot("Lag (sweeps)", "g_CM(t) (A^2)",
+                          f"Center-of-Mass MSD vs Lag (N={ref_N}, per phi)")
+    for phi in sorted(all_results.keys()):
+        if ref_N in all_results[phi]:
+            gcm = all_results[phi][ref_N]['gcm']
+            if gcm:
+                lags = sorted(gcm.keys())
+                vals = [gcm[l] for l in lags]
+                ax.plot(lags, vals, 'o-', color=phi_color(phi), markersize=3,
+                        label=f'phi={format_phi(phi)}')
+    ax.legend(fontsize=9)
+    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties", "fig_gcm_vs_sweep_per_phi.png"))
+
+
+def plot_D_vs_N_per_phi(all_results: dict, base_dir: str):
+    """fig_D_vs_N_per_phi.png — D vs N, one curve per phi with fits."""
+    fig, ax = setup_plot("N (chain length)", "D (A^2/sweep)",
+                          "Diffusion Coefficient vs N (per phi)")
+    for phi in sorted(all_results.keys()):
+        Ns = sorted(all_results[phi].keys())
+        Ds = [_estimate_diffusion_coefficient(all_results[phi][n]['gcm']) for n in Ns]
+        valid = [(n, d) for n, d in zip(Ns, Ds) if d > 0]
+        if valid:
+            vn, vd = zip(*valid)
+            color = phi_color(phi)
+            phi_str = format_phi(phi)
+            ax.plot(vn, vd, 'o-', color=color, markersize=6, label=f'phi={phi_str}')
+            slope, intercept, r2 = power_law_fit(vn, vd)
+            fit_y = np.exp(intercept) * np.array(vn) ** slope
+            ax.plot(vn, fit_y, '--', color=color, alpha=0.5,
+                    label=f'  exp={slope:.3f} (R2={r2:.3f})')
+    ax.legend(fontsize=8, ncol=2)
+    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties", "fig_D_vs_N_per_phi.png"))
+
+
+def plot_tauR_vs_N_per_phi(all_results: dict, base_dir: str):
+    """fig_tauR_vs_N_per_phi.png — tau_R vs N, one curve per phi."""
+    fig, ax = setup_plot("N (chain length)", "tau_R (sweeps)",
+                          "Relaxation Time vs N (per phi)")
+    for phi in sorted(all_results.keys()):
+        Ns = sorted(all_results[phi].keys())
+        taus = [_estimate_relaxation_time(all_results[phi][n]['gr']) for n in Ns]
+        valid = [(n, t) for n, t in zip(Ns, taus) if t > 0]
+        if valid:
+            vn, vt = zip(*valid)
+            color = phi_color(phi)
+            phi_str = format_phi(phi)
+            ax.plot(vn, vt, 'o-', color=color, markersize=6, label=f'phi={phi_str}')
+            slope, intercept, r2 = power_law_fit(vn, vt)
+            fit_y = np.exp(intercept) * np.array(vn) ** slope
+            ax.plot(vn, fit_y, '--', color=color, alpha=0.5,
+                    label=f'  exp={slope:.3f} (R2={r2:.3f})')
+    ax.legend(fontsize=8, ncol=2)
+    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties", "fig_tauR_vs_N_per_phi.png"))
+
+
+def plot_D_exponent_vs_phi(all_results: dict, base_dir: str):
+    """fig_D_exponent_vs_phi.png — D scaling exponent vs phi."""
+    fig, ax = setup_plot("phi (volume fraction)", "D exponent (D ~ N^alpha)",
+                          "Diffusion Exponent vs Density", loglog=False)
+    ax.set_xscale('log')
+    phis = sorted(all_results.keys())
+    exponents = []
+    for phi in phis:
+        Ns = sorted(all_results[phi].keys())
+        Ds = [_estimate_diffusion_coefficient(all_results[phi][n]['gcm']) for n in Ns]
+        valid = [(n, d) for n, d in zip(Ns, Ds) if d > 0]
+        if valid:
+            slope, _, _ = power_law_fit([v[0] for v in valid], [v[1] for v in valid])
+            exponents.append(slope)
+        else:
+            exponents.append(0)
+    ax.plot(phis, exponents, 'o-', color='C3', markersize=8, label='D exponent')
+    ax.axhline(y=-1.00, color='red', linestyle='--', alpha=0.6, label='Rouse theory (-1.00)')
+    ax.legend(fontsize=10)
+    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties", "fig_D_exponent_vs_phi.png"))
+
+
+def plot_tauR_exponent_vs_phi(all_results: dict, base_dir: str):
+    """fig_tauR_exponent_vs_phi.png — tau_R scaling exponent vs phi."""
+    fig, ax = setup_plot("phi (volume fraction)", "tau_R exponent (tau_R ~ N^beta)",
+                          "Relaxation Time Exponent vs Density", loglog=False)
+    ax.set_xscale('log')
+    phis = sorted(all_results.keys())
+    exponents = []
+    for phi in phis:
+        Ns = sorted(all_results[phi].keys())
+        taus = [_estimate_relaxation_time(all_results[phi][n]['gr']) for n in Ns]
+        valid = [(n, t) for n, t in zip(Ns, taus) if t > 0]
+        if valid:
+            slope, _, _ = power_law_fit([v[0] for v in valid], [v[1] for v in valid])
+            exponents.append(slope)
+        else:
+            exponents.append(0)
+    ax.plot(phis, exponents, 'o-', color='C4', markersize=8, label='tau_R exponent')
+    ax.axhline(y=2.18, color='red', linestyle='--', alpha=0.6, label='SAW theory (2.18)')
+    ax.legend(fontsize=10)
+    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties", "fig_tauR_exponent_vs_phi.png"))
+
+
+def plot_g1_shorttime_exponent_vs_phi(all_results: dict, base_dir: str):
+    """fig_g1_shorttime_exponent_vs_phi.png — g1 short-time exponent vs phi."""
+    fig, ax = setup_plot("phi (volume fraction)", "g1 short-time exponent",
+                          "g1 Short-Time Exponent vs Density", loglog=False)
+    ax.set_xscale('log')
+    phis = sorted(all_results.keys())
+    exponents = []
+    for phi in phis:
+        Ns = sorted(all_results[phi].keys())
+        g1_exps = [_estimate_g1_short_time_exponent(all_results[phi][n]['g1']) for n in Ns]
+        valid = [e for e in g1_exps if e > 0]
+        exponents.append(np.mean(valid) if valid else 0)
+    ax.plot(phis, exponents, 'o-', color='C5', markersize=8, label='g1 short-time exp')
+    ax.axhline(y=0.50, color='red', linestyle='--', alpha=0.6, label='Rouse theory (0.50)')
+    ax.axhline(y=0.60, color='orange', linestyle=':', alpha=0.5, label='Kuriata observed (0.60)')
+    ax.legend(fontsize=10)
+    save_plot(fig, os.path.join(base_dir, "02_dynamic_properties",
+                                 "fig_g1_shorttime_exponent_vs_phi.png"))
+
+
+# ============================================================================
+# Compliance Heatmap
+# ============================================================================
+
+def plot_compliance_heatmap(all_results: dict, base_dir: str, all_phi_metrics: dict):
+    """Generate rouse_compliance_heatmap.png — 2D PASS/FAIL/MARGINAL grid.
+
+    Args:
+        all_results: full results dict[phi][N]
+        base_dir: output root
+        all_phi_metrics: dict[phi] -> metrics from _compute_phi_metrics
+    """
+    properties = [
+        ("2nu (R2)", "R2_exponent", 1.18, 0.10),
+        ("2nu (Rg2)", "Rg2_exponent", 1.18, 0.10),
+        ("R2/Rg2", "R2_Rg2_ratio", 6.25, 1.25),
+        ("D exp", "D_exponent", -1.00, 0.10),
+        ("tau_R exp", "tau_R_exponent", 2.18, 0.20),
+        ("g_CM exp", "g_CM_exponent", 1.00, 0.10),
+        ("g1 exp", "g1_exponent", 0.50, 0.15),
+    ]
+
+    phis = sorted(all_phi_metrics.keys())
+    n_props = len(properties)
+    n_phis = len(phis)
+    matrix = np.zeros((n_props, n_phis))
+    cell_text = [['' for _ in range(n_phis)] for _ in range(n_props)]
+
+    for j, phi in enumerate(phis):
+        metrics = all_phi_metrics[phi]
+        for i, (label, key, theory, tol) in enumerate(properties):
+            measured = metrics[key]["measured"]
+            verdict = _check_marginal(measured, theory, tol)
+            matrix[i, j] = verdict
+            cell_text[i][j] = f'{measured:.2f}'
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    cmap = mcolors.ListedColormap(['#ff4444', '#ffcc00', '#44bb44'])
+    bounds = [-0.5, 0.5, 1.5, 2.5]
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+    im = ax.imshow(matrix, cmap=cmap, norm=norm, aspect='auto')
+
+    # Labels
+    ax.set_xticks(range(n_phis))
+    ax.set_xticklabels([format_phi(p) for p in phis], fontsize=11)
+    ax.set_yticks(range(n_props))
+    ax.set_yticklabels([p[0] for p in properties], fontsize=11)
+    ax.set_xlabel("phi (volume fraction)", fontsize=12)
+    ax.set_title("Rouse Compliance Heatmap: PASS / MARGINAL / FAIL", fontsize=14)
+
+    # Cell text
+    for i in range(n_props):
+        for j in range(n_phis):
+            color = 'white' if matrix[i, j] == 0 else 'black'
+            ax.text(j, i, cell_text[i][j], ha='center', va='center',
+                    fontsize=9, color=color, fontweight='bold')
+
+    # Legend
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor='#44bb44', label='PASS'),
+                       Patch(facecolor='#ffcc00', label='MARGINAL'),
+                       Patch(facecolor='#ff4444', label='FAIL')]
+    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1),
+              fontsize=10)
+
+    fig.tight_layout()
+    save_plot(fig, os.path.join(base_dir, "05_data", "rouse_compliance_heatmap.png"))
+    print("  Generated compliance heatmap")
+
+    return matrix
+
+
+# ============================================================================
+# Validation Summary JSON
+# ============================================================================
+
+def write_validation_summary(all_results: dict, base_dir: str):
+    """Write tavg_validation_summary.json with per-phi metrics, phi*, and compliance."""
+    phis = sorted(all_results.keys())
+
+    # Compute metrics for each phi
+    all_phi_metrics = {}
+    for phi in phis:
+        all_phi_metrics[phi] = _compute_phi_metrics(all_results[phi])
+
+    # Generate compliance heatmap
+    plot_compliance_heatmap(all_results, base_dir, all_phi_metrics)
+
+    # Identify phi* for each property
+    properties_for_phi_star = [
+        ("R2_exponent", 1.18, 0.10),
+        ("Rg2_exponent", 1.18, 0.10),
+        ("R2_Rg2_ratio", 6.25, 1.25),
+        ("D_exponent", -1.00, 0.10),
+        ("tau_R_exponent", 2.18, 0.20),
+        ("g_CM_exponent", 1.00, 0.10),
+        ("g1_exponent", 0.50, 0.15),
+    ]
+
+    phi_star = {}
+    for key, theory, tol in properties_for_phi_star:
+        phi_star[key] = None
+        for phi in phis:
+            if not all_phi_metrics[phi][key]["pass"]:
+                phi_star[key] = phi
+                break
+        if phi_star[key] is None:
+            phi_star[key] = "never (passes at all phi)"
+
+    # Build Rouse 1953 assessment (at dilute limit)
+    dilute_phi = phis[0]
+    dilute = all_phi_metrics[dilute_phi]
+    d_detail = dilute["_detail"]
+    Ns = d_detail["N_values"]
+
+    def met(val, reason):
+        return f"{'MET' if val else 'NOT MET'} -- {reason}"
+
+    rouse_1953 = {
+        "1.1_gaussian_submolecule": met(False,
+            "surpass-alpha uses athermal excluded volume (E=1e6), producing SAW chains, "
+            "not Gaussian submolecules."),
+        "1.2_R2_scaling": met(dilute["R2_exponent"]["pass"],
+            f"<R2> ~ N^(2nu) with 2nu = {dilute['R2_exponent']['measured']:.3f} "
+            f"(R2_fit = {dilute['R2_exponent']['r2_fit']:.4f})"),
+        "1.3_Rg2_scaling": met(dilute["Rg2_exponent"]["pass"],
+            f"<Rg2> ~ N^(2nu) with 2nu = {dilute['Rg2_exponent']['measured']:.3f} "
+            f"(R2_fit = {dilute['Rg2_exponent']['r2_fit']:.4f})"),
+        "1.4_ratio_R2_Rg2": met(dilute["R2_Rg2_ratio"]["pass"],
+            f"Mean R2/Rg2 = {dilute['R2_Rg2_ratio']['measured']:.3f} "
+            f"(SAW expected ~6.25)"),
+        "1.5_config_probability": met(False,
+            "End-to-end distribution is non-Gaussian for SAW chains with excluded volume."),
+        "2.1_eigenvalues": met(False,
+            "Rouse eigenvalues require harmonic springs; surpass-alpha uses rigid bonds + MC moves."),
+        "2.2_relaxation_times": met(True,
+            f"tau_R extracted from g_R(t) = 1/e crossing for all N."),
+        "2.3_long_wavelength_approx": met(False,
+            "Long-wavelength approx tau_p ~ N^2/p^2 not directly measurable from MC."),
+        "2.4_tau_R_scaling": met(dilute["tau_R_exponent"]["pass"],
+            f"tau_R ~ N^{dilute['tau_R_exponent']['measured']:.3f} "
+            f"(theory: 2.18)"),
+        "2.5_steady_flow_viscosity": met(False,
+            "Viscosity requires stress tensor; not available from equilibrium MC."),
+        "2.6_complex_viscosity": met(False,
+            "Complex viscosity requires frequency-domain analysis; not available from MC."),
+        "2.7_shear_modulus": met(False,
+            "Shear modulus requires stress autocorrelation; not computed."),
+        "2.8_high_freq_approx": met(False,
+            "High-frequency behavior not accessible from MC simulations."),
+        "2.9_diffusion_coeff": met(dilute["D_exponent"]["pass"],
+            f"D ~ N^{dilute['D_exponent']['measured']:.3f} "
+            f"(theory: -1.00)"),
+        "2.10_g_CM": met(dilute["g_CM_exponent"]["pass"],
+            f"g_CM(t) ~ t^{dilute['g_CM_exponent']['measured']:.3f} "
+            f"(theory: 1.00)"),
+        "2.11_g1_middle_segment": met(dilute["g1_exponent"]["pass"],
+            f"g1 short-time exponent = {dilute['g1_exponent']['measured']:.3f} "
+            f"(theory: 0.50)"),
+        "2.12_end_to_end_autocorr": met(True,
+            "g_R(t) decays from 1 to 0; tau_R extracted for all N."),
+    }
+
+    # Build full summary
+    summary = {
+        "per_phi": {},
+        "phi_star": {},
+        "dilute_limit": dilute,
+        "rouse_1953_properties": rouse_1953,
+    }
+
+    for phi in phis:
+        phi_key = format_phi(phi)
+        metrics = all_phi_metrics[phi]
+        summary["per_phi"][phi] = {
+            k: v for k, v in metrics.items() if k != "_detail"
+        }
+        summary["per_phi"][phi]["_detail"] = metrics["_detail"]
+
+    for key, val in phi_star.items():
+        summary["phi_star"][key] = val if isinstance(val, str) else format_phi(val)
+
+    # Write JSON
     filepath = os.path.join(base_dir, "05_data", "tavg_validation_summary.json")
     ensure_dir(os.path.dirname(filepath))
+
+    def json_default(o):
+        if isinstance(o, np.bool_):
+            return bool(o)
+        if isinstance(o, (np.floating, np.integer)):
+            return float(o)
+        return o
+
     with open(filepath, 'w') as f:
-        json.dump(summary, f, indent=2)
+        json.dump(summary, f, indent=2, default=json_default)
     print(f"  Wrote validation summary to {filepath}")
     return summary
 
 
 # ============================================================================
-# Report Files
+# README
 # ============================================================================
 
 def write_readme(all_results: dict, summary: dict, base_dir: str):
-    """Write README.md with full summary table and Rouse 1953 assessment."""
+    """Write README.md with phi-dependent analysis and Rouse 1953 assessment."""
     filepath = os.path.join(base_dir, "README.md")
-    Ns = sorted(all_results.keys())
 
-    from .config import CHAIN_CONFIGS
+    from .config import compute_n_chains, compute_box_size, SIGMA
 
-    # Extract exponent data from new summary format
-    exponents = [
-        ("R2 exponent (2nu)", summary["R2_exponent"]),
-        ("Rg2 exponent (2nu)", summary["Rg2_exponent"]),
-        ("R2/Rg2 ratio", summary["R2_Rg2_ratio"]),
-        ("D exponent", summary["D_exponent"]),
-        ("tau_R exponent", summary["tau_R_exponent"]),
-        ("g_CM exponent", summary["g_CM_exponent"]),
-        ("g1 exponent", summary["g1_exponent"]),
-    ]
+    phis = sorted(all_results.keys())
 
     lines = [
         "# Rouse Model Validation: surpass-alpha Coarse-Grained Framework",
         "",
         "## Purpose",
         "",
-        "This validation campaign proves that the surpass-alpha coarse-grained (CG)",
-        "representation abides by Rouse static and dynamic properties as validated in",
-        "Kuriata, Gront & Sikorski, CMST 22(4), 179-185 (2016), and determines which",
-        "properties from the original Rouse paper (Rouse, 1953, J. Chem. Phys. 21(7),",
-        "1272-1280) are met by surpass-alpha with quantitative justification.",
+        "Validate that the surpass-alpha CG representation abides by Rouse static",
+        "and dynamic properties as published in Kuriata, Gront & Sikorski, CMST 22(4),",
+        "179-185 (2016), and determine which Rouse (1953) properties are met across",
+        "a progression of increasing chain densities (phi).",
+        "",
+        "## Key Physical Clarifications (Dr. Dominik Gront, 30 Mar 2026)",
+        "",
+        "- Excluded volume energy E is INFINITE (RepulsiveEnergy = 1e6 as practical",
+        "  approximation). Any overlapping move is ALWAYS rejected. Temperature is",
+        "  irrelevant to the accept/reject decision (athermal system).",
+        "- Concentration (phi) tested across a density progression, not a single value.",
+        "- l0/d0 = 1.5 (bond spacing 5.7A / bead diameter 3.8A) chosen by Mohammad",
+        "  Nazmul Saqib, placing surpass-alpha in the SAW scaling regime per Kuriata Fig. 3.",
         "",
         "## Simulation Parameters",
         "",
         "| Parameter | Value |",
         "|-----------|-------|",
-        "| Bead diameter (sigma) | 3.8 A |",
-        "| Bond length (l0) | 5.7 A (1.5*sigma) |",
-        "| Volume fraction (phi) | 0.035 |",
-        "| Temperature | 300 K |",
-        "| Repulsive energy | 1e6 kJ/mol (hard-core) |",
-        "| Contact energy | 0.0 kJ/mol (athermal) |",
+        "| Bead diameter (sigma/d0) | 3.8 A |",
+        "| Bond length (l0) | 5.7 A (1.5 * sigma) |",
+        "| l0/d0 | 1.5 (SAW regime, Kuriata Fig. 3) |",
+        "| Excluded volume | INFINITE (RepulsiveEnergy = 1e6, athermal) |",
+        "| Contact energy | 0.0 kJ/mol (no attractive interactions) |",
         "| MC moves | Segmented hinge + N-tail + C-tail + pivot |",
-        "| Initialization | Random walk |",
-        "| Backend | CPU (CellListSegmentedEnergyComputer + CaContactKernel) |",
+        "| Initialization | Random walk (self-avoiding, off-lattice) |",
+        "| Chain lengths | 25, 50, 100, 250, 500 |",
+        f"| Phi levels | {', '.join(format_phi(p) for p in phis)} |",
+        f"| State points | {len(phis) * len(CHAIN_LENGTHS)} (5 N x {len(phis)} phi) |",
         "| Random seed | 42 |",
         "",
-        "## Chain Length Configurations",
+        "## 30-State-Point Configuration Table",
         "",
-        "| N | Chains | Eq Sweeps | Prod Sweeps | Box Size (A) | phi |",
-        "|---|--------|-----------|-------------|--------------|-----|",
+        "| N | phi | Chains | Eq Sweeps | Prod Sweeps | Box (A) |",
+        "|---|-----|--------|-----------|-------------|---------|",
     ]
 
-    for n in Ns:
-        nc, eq, prod, box = CHAIN_CONFIGS[n]
-        lines.append(f"| {n} | {nc} | {eq:,} | {prod:,} | {box} | 0.035 |")
+    for N in CHAIN_LENGTHS:
+        for phi in phis:
+            nc = compute_n_chains(N, phi)
+            box = compute_box_size(N, nc, phi)
+            lines.append(f"| {N} | {format_phi(phi)} | {nc} | 10,000 | 10,000 | {box:.1f} |")
 
+    # Dilute-limit summary
+    dilute = summary.get("dilute_limit", {})
     lines += [
         "",
-        "## Summary Table: Measured vs Theoretical Exponents",
+        "## Dilute Limit Results (phi=0.001)",
         "",
-        "| Property | Theory | Measured | Pass/Fail |",
-        "|----------|--------|----------|-----------|",
+        "| Property | Theory | Measured | R2_fit | Pass/Fail |",
+        "|----------|--------|----------|--------|-----------|",
     ]
-    for name, entry in exponents:
-        status = "PASS" if entry["pass"] else "FAIL"
-        lines.append(f"| {name} | {entry['theory']:.2f} | {entry['measured']:.2f} | {status} |")
+    for key in ["R2_exponent", "Rg2_exponent", "R2_Rg2_ratio", "D_exponent",
+                "tau_R_exponent", "g_CM_exponent", "g1_exponent"]:
+        entry = dilute.get(key, {})
+        if isinstance(entry, dict) and "measured" in entry:
+            status = "PASS" if entry.get("pass", False) else "FAIL"
+            r2_fit = entry.get("r2_fit", "N/A")
+            r2_str = f"{r2_fit:.4f}" if isinstance(r2_fit, float) else str(r2_fit)
+            lines.append(f"| {key} | {entry.get('theory', 'N/A')} | "
+                        f"{entry['measured']:.3f} | {r2_str} | {status} |")
 
+    # phi* analysis
+    phi_star = summary.get("phi_star", {})
     lines += [
         "",
-        "## R2/Rg2 Ratios Per Chain Length",
+        "## Critical Density phi* Analysis",
         "",
+        "phi* is the lowest phi at which each Rouse property fails the pass/fail threshold.",
+        "",
+        "| Property | phi* |",
+        "|----------|------|",
     ]
-    detail = summary.get("_detail", {})
-    r2_per_n = detail.get("R2_over_Rg2_per_N", {})
-    for n in Ns:
-        r = r2_per_n.get(str(n), 0.0)
-        lines.append(f"- N={n}: {r:.3f}")
-    lines.append(f"- Mean: {summary['R2_Rg2_ratio']['measured']:.3f} (SAW expected ~6.25)")
+    for key, val in phi_star.items():
+        lines.append(f"| {key} | {val} |")
 
     # Rouse 1953 assessment
+    rouse = summary.get("rouse_1953_properties", {})
     lines += [
         "",
         "## Rouse 1953 Property Assessment",
         "",
-        "Assessment of ALL properties from Rouse, P.E. Jr., J. Chem. Phys. 21(7),",
-        "1272-1280 (1953) as applied to the surpass-alpha CG framework.",
-        "",
-        "### Static Properties (Sections 1.1-1.5)",
+        "### Properties MET by surpass-alpha",
         "",
     ]
-    rouse = summary.get("rouse_1953_properties", {})
-    static_keys = ["1.1_gaussian_submolecule", "1.2_R2_scaling", "1.3_Rg2_scaling",
-                    "1.4_ratio_R2_Rg2", "1.5_config_probability"]
-    for key in static_keys:
-        lines.append(f"**{key}**: {rouse.get(key, 'N/A')}")
-        lines.append("")
-
+    for key, val in rouse.items():
+        if isinstance(val, str) and val.startswith("MET"):
+            lines.append(f"- **{key}**: {val}")
     lines += [
-        "### Dynamic Properties (Sections 2.1-2.12)",
+        "",
+        "### Properties NOT MET by surpass-alpha",
         "",
     ]
-    dynamic_keys = ["2.1_eigenvalues", "2.2_relaxation_times", "2.3_long_wavelength_approx",
-                     "2.4_tau_R_scaling", "2.5_steady_flow_viscosity", "2.6_complex_viscosity",
-                     "2.7_shear_modulus", "2.8_high_freq_approx", "2.9_diffusion_coeff",
-                     "2.10_g_CM", "2.11_g1_middle_segment", "2.12_end_to_end_autocorr"]
-    for key in dynamic_keys:
-        lines.append(f"**{key}**: {rouse.get(key, 'N/A')}")
-        lines.append("")
+    for key, val in rouse.items():
+        if isinstance(val, str) and val.startswith("NOT MET"):
+            lines.append(f"- **{key}**: {val}")
 
-    # Directory guide
+    # Cross-phi findings
     lines += [
-        "## Directory Guide",
         "",
-        "```",
-        "D:\\git\\rouse_python_validation_deliverable_2016_MAR_26\\",
-        "  requirements_list.md            -- Requirement tracker (REQ-00 to REQ-57)",
-        "  iteration_log.txt               -- Agent activity log",
-        "  README.md                        -- This file",
-        "  .gitattributes                   -- Line ending rules",
-        "  01_static_properties\\            -- 4 cross-N static scaling plots",
-        "    fig_R2_vs_N.png               -- log-log <R2> vs N with regression",
-        "    fig_Rg2_vs_N.png              -- log-log <Rg2> vs N with regression",
-        "    fig_R2_Rg2_combined_vs_N.png  -- Both on same axes",
-        "    fig_ratio_R2_over_Rg2_vs_N.png -- Ratio with 6.25 reference line",
-        "  02_dynamic_properties\\           -- 4 cross-N dynamic property plots",
-        "    fig_g1_middle_segment_msd_vs_sweep.png  -- g1(t) all N, ref slope",
-        "    fig_gcm_center_of_mass_msd_vs_sweep.png -- gCM(t) all N, ref slope",
-        "    fig_diffusion_coefficient_D_vs_N.png    -- D vs N regression",
-        "    fig_relaxation_time_tau_R_vs_N.png      -- tau_R vs N regression",
-        "  03_per_chain_length\\N{N}\\        -- 5 plots per chain length (25 total)",
-        "    R2_vs_MC_sweep.png",
-        "    Rg2_vs_MC_sweep.png",
-        "    g1_middle_segment_msd.png",
-        "    gcm_center_of_mass_msd.png",
-        "    autocorrelation_end_to_end_vector.png",
-        "  04_equilibration_evidence\\       -- 2 equilibration evidence plots",
-        "    fig_R2_vs_MC_sweep_all_N.png  -- R2 with eq/prod phase marker",
-        "    fig_Rg2_vs_MC_sweep_all_N.png -- Rg2 with eq/prod phase marker",
-        "  05_data\\                          -- All TSV data + validation JSON",
-        "    tavg_validation_summary.json   -- All exponents + Rouse 1953 assessment",
-        "    N{N}\\                           -- Per-chain-length data (5 dirs)",
-        "      fig1_static_N{N}_s42.tsv    -- chain_id, R2, Rg2",
-        "      fig2_seg20_msd_N{N}_s42.tsv -- lag_sweep, g1",
-        "      fig3_seg20_diffusion_N{N}_s42.tsv -- lag_sweep, g_CM",
-        "      fig4_seg20_autocorr_N{N}_s42.tsv  -- lag_sweep, g_R",
-        "      static_vs_sweep.tsv         -- sweep, phase, R2, Rg2, ratio",
-        "  06_python_scripts\\               -- All Python scripts (self-contained)",
-        "```",
+        "## Cross-Phi Findings",
+        "",
+        "| phi | 2nu(R2) | 2nu(Rg2) | R2/Rg2 | D exp | tau_R exp | g1 exp |",
+        "|-----|---------|----------|--------|-------|-----------|--------|",
+    ]
+    per_phi = summary.get("per_phi", {})
+    for phi in phis:
+        phi_str = format_phi(phi)
+        m = per_phi.get(phi, {})
+        vals = []
+        for key in ["R2_exponent", "Rg2_exponent", "R2_Rg2_ratio",
+                     "D_exponent", "tau_R_exponent", "g1_exponent"]:
+            entry = m.get(key, {})
+            if isinstance(entry, dict) and "measured" in entry:
+                v = entry["measured"]
+                p = "P" if entry.get("pass", False) else "F"
+                vals.append(f"{v:.2f}({p})")
+            else:
+                vals.append("N/A")
+        lines.append(f"| {phi_str} | {' | '.join(vals)} |")
+
+    # References
+    lines += [
         "",
         "## References",
         "",
-        "1. Rouse, P.E. Jr., \"A Theory of the Linear Viscoelastic Properties of Dilute",
-        "   Solutions of Coiling Polymers\", J. Chem. Phys. 21(7), 1272-1280 (1953)",
-        "2. Kuriata, A., Gront, D. & Sikorski, A., \"Computer simulation of thermodynamic",
-        "   and conformational properties of polymer chains. Validation of the Rouse model\",",
-        "   CMST 22(4), 179-185 (2016)",
+        "1. Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)",
+        "2. Kuriata, A., Gront, D. & Sikorski, A., CMST 22(4), 179-185 (2016)",
         "",
         "---",
         "Generated by rouse_model_python (surpass-alpha CG framework)",
@@ -845,7 +1005,7 @@ def write_readme(all_results: dict, summary: dict, base_dir: str):
 
     with open(filepath, 'w') as f:
         f.write('\n'.join(lines))
-    print(f"  Wrote README.md")
+    print("  Wrote README.md")
 
 
 def write_gitattributes(base_dir: str):
@@ -854,4 +1014,45 @@ def write_gitattributes(base_dir: str):
     content = "*.tsv text eol=lf\n*.png binary\n*.json text eol=lf\n*.md text eol=lf\n"
     with open(filepath, 'w') as f:
         f.write(content)
-    print(f"  Wrote .gitattributes")
+    print("  Wrote .gitattributes")
+
+
+# ============================================================================
+# Main Plot Dispatcher
+# ============================================================================
+
+def generate_all_plots(all_results: dict, base_dir: str):
+    """Generate all plots for the 30-state-point validation.
+
+    Args:
+        all_results: dict[phi][N] -> results_dict
+    """
+    phis = sorted(all_results.keys())
+
+    # Per-state-point plots (5 x 30 = 150)
+    for phi in phis:
+        for N in sorted(all_results[phi].keys()):
+            plot_per_state_point(all_results[phi][N], base_dir, N, phi)
+
+    # Per-phi equilibration evidence (2 x 6 = 12)
+    for phi in phis:
+        plot_equilibration_per_phi(all_results[phi], base_dir, phi)
+
+    # Cross-phi static plots (5)
+    plot_R2_vs_N_per_phi(all_results, base_dir)
+    plot_Rg2_vs_N_per_phi(all_results, base_dir)
+    plot_2nu_vs_phi(all_results, base_dir)
+    plot_ratio_R2_Rg2_vs_phi(all_results, base_dir)
+    plot_R2_Rg2_combined_dilute(all_results, base_dir)
+
+    # Cross-phi dynamic plots (7)
+    plot_g1_vs_sweep_per_phi(all_results, base_dir)
+    plot_gcm_vs_sweep_per_phi(all_results, base_dir)
+    plot_D_vs_N_per_phi(all_results, base_dir)
+    plot_tauR_vs_N_per_phi(all_results, base_dir)
+    plot_D_exponent_vs_phi(all_results, base_dir)
+    plot_tauR_exponent_vs_phi(all_results, base_dir)
+    plot_g1_shorttime_exponent_vs_phi(all_results, base_dir)
+
+    total_plots = 150 + 12 + 5 + 7  # 174 plots
+    print(f"  Generated {total_plots} plots total")

@@ -1,43 +1,44 @@
 """
-Fast simulation using numpy + numba for the MC sweep hot path.
+GPU fast simulation: full MC simulation with GPU-resident positions.
 
-Drop-in replacement for simulation.py's RouseSimulation.
-Uses fast_sweep.fast_perform_sweep() instead of multistep_mc.perform_sweep().
-Positions stored as numpy arrays; PyTorch used only for initialization and
-observable computation (which is not on the hot path).
+Drop-in replacement for FastRouseSimulation. Same physics and interface,
+but the MC sweep runs on GPU via CuPy RawKernels. Positions stay on GPU
+as PyTorch CUDA tensors; observables use existing PyTorch code directly.
 """
 
-import time
 import numpy as np
 import torch
 from tqdm import tqdm
 
 from .config import SimulationConfig
 from .chain import ChainState
-from .fast_energy import FastEnergyComputer
-from .fast_sweep import fast_perform_sweep, fast_perform_pivot_phase
+from .gpu_sweep import GPUFastSweep, gpu_perform_sweep
 from .observables import StaticObservables, DynamicAccumulator, SweepTracker
 from .number_space import NumberSpace
 from .simulation import SimulationStats
 
 
-class FastRouseSimulation:
+class GPURouseSimulation:
     """
-    Rouse-model MC simulation using numba-optimized sweep.
+    Rouse-model MC simulation using GPU-accelerated sweep.
 
-    Same physics and algorithm as RouseSimulation, but with numpy/numba
-    for the MC sweep hot path. Observables still use PyTorch via NumberSpace.
+    Same physics and algorithm as FastRouseSimulation, but with positions
+    on GPU and the sweep hot path running via CuPy CUDA kernels.
+    Observables use existing PyTorch code directly (positions are CUDA tensors).
     """
 
     def __init__(self, cfg: SimulationConfig, snapshot_collector=None):
         self.cfg = cfg
         self.ns = NumberSpace.from_config(cfg)
         self.state = ChainState(cfg)
-        self.fast_energy = FastEnergyComputer(cfg)
         self.gen = cfg.get_torch_gen()
         self.stats = SimulationStats()
         self.snapshot_collector = snapshot_collector
         self.rng = np.random.RandomState(cfg.seed)
+
+        # GPU sweep engine (compiled kernels, cell list, buffers)
+        self.device = cfg.get_torch_device()
+        self.sweep_engine = GPUFastSweep(cfg, self.device)
 
         # Observables
         self.dynamic_accum = DynamicAccumulator(cfg, self.ns)
@@ -46,24 +47,18 @@ class FastRouseSimulation:
         self.final_R2 = None
         self.final_Rg2 = None
 
-        # Numpy position array (the main working copy)
-        self._pos_np = None
-
     def initialize(self):
-        """Initialize chain positions using PyTorch random walk, then copy to numpy."""
+        """Initialize chain positions using PyTorch random walk."""
         self.state.initialize_random_walk(self.gen)
         self.state.wrap_all()
-        # Copy to numpy for fast sweep
-        self._pos_np = self.state.positions.cpu().numpy().copy()
+        # Ensure positions are on the target GPU device
+        self.state.positions = self.state.positions.to(self.device)
         print(f"  Initialized {self.cfg.n_chains} chains of N={self.cfg.N} "
-              f"(box={self.cfg.box_size:.1f} A, fast mode)", flush=True)
-
-    def _sync_torch_from_numpy(self):
-        """Copy numpy positions back to PyTorch state for observable computation."""
-        self.state.positions.copy_(torch.from_numpy(self._pos_np))
+              f"(box={self.cfg.box_size:.1f} A, GPU fast mode, {self.device})",
+              flush=True)
 
     def run_equilibration(self):
-        """Run equilibration sweeps with fast path."""
+        """Run equilibration sweeps with GPU fast path."""
         cfg = self.cfg
         total = cfg.eq_sweeps
         seg_info = self.state.segments
@@ -72,16 +67,13 @@ class FastRouseSimulation:
                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]")
 
         for sweep in pbar:
-            fast_perform_sweep(self._pos_np, seg_info, self.fast_energy,
-                               cfg, self.stats, self.rng)
+            gpu_perform_sweep(self.state.positions, seg_info,
+                              self.sweep_engine, cfg, self.stats, self.rng)
 
             if sweep % max(1, total // 50) == 0:
-                # Sync to torch for observable computation
-                self._sync_torch_from_numpy()
                 self.sweep_tracker.record(self.state, sweep, "equilibration")
 
             if self.snapshot_collector is not None:
-                self._sync_torch_from_numpy()
                 self.snapshot_collector.capture(self.state.positions, sweep, "eq")
 
             pbar.set_postfix_str(self.stats.report(), refresh=False)
@@ -102,8 +94,7 @@ class FastRouseSimulation:
         Equilibration (which uses all moves including pivots) ensures the
         starting configuration is properly sampled.
 
-        Per-bead cumulative displacement is tracked in numpy space (zero-copy)
-        to avoid per-sweep torch sync overhead.
+        Per-bead cumulative displacement is tracked on GPU.
         """
         cfg = self.cfg
         ns = self.ns
@@ -111,8 +102,8 @@ class FastRouseSimulation:
         sample_interval = cfg.sample_interval
         seg_info = self.state.segments
 
-        # Cumulative per-bead displacement tracked in numpy (fast, no sync)
-        cum_seg_disp_np = np.zeros_like(self._pos_np)  # [n_chains, N, 3]
+        # Cumulative per-bead displacement tracked on GPU
+        cum_disp = torch.zeros_like(self.state.positions)  # [n_chains, N, 3] on GPU
         box = cfg.box_size
         inv_box = 1.0 / box
 
@@ -120,32 +111,29 @@ class FastRouseSimulation:
                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]")
 
         for sweep in pbar:
-            # Save positions before segment moves
-            pos_before = self._pos_np.copy()
+            # Save positions before sweep
+            pos_before = self.state.positions.clone()
 
             # LOCAL moves only — this IS the Rouse time step
-            fast_perform_sweep(self._pos_np, seg_info, self.fast_energy,
-                               cfg, self.stats, self.rng, skip_pivot=True)
+            gpu_perform_sweep(self.state.positions, seg_info,
+                              self.sweep_engine, cfg, self.stats, self.rng,
+                              skip_pivot=True)
 
-            # Per-bead displacement with MIC wrapping (numpy, no torch sync)
-            delta = self._pos_np - pos_before
-            delta -= box * np.round(delta * inv_box)
-            cum_seg_disp_np += delta
+            # Per-bead displacement with MIC wrapping (on GPU)
+            delta = self.state.positions - pos_before
+            delta -= box * torch.round(delta * inv_box)
+            cum_disp += delta
 
             if sweep % max(1, total // 50) == 0:
-                self._sync_torch_from_numpy()
                 self.sweep_tracker.record(
                     self.state, cfg.eq_sweeps + sweep, "production")
 
             if sweep % sample_interval == 0:
-                self._sync_torch_from_numpy()
-                cum_seg_disp_torch = torch.from_numpy(
-                    cum_seg_disp_np.copy()).to(cfg.dtype)
+                cum_disp_copy = cum_disp.clone().to(cfg.dtype)
                 self.dynamic_accum.record_snapshot(
-                    self.state, sweep, cum_bead_disp=cum_seg_disp_torch)
+                    self.state, sweep, cum_bead_disp=cum_disp_copy)
 
             if self.snapshot_collector is not None:
-                self._sync_torch_from_numpy()
                 self.snapshot_collector.capture(
                     self.state.positions, cfg.eq_sweeps + sweep, "prod")
 
@@ -155,7 +143,6 @@ class FastRouseSimulation:
         dt = pbar.format_dict.get('elapsed', 0)
 
         # Final snapshot
-        self._sync_torch_from_numpy()
         positions = self.state.positions
         self.final_R2 = StaticObservables.compute_R2(positions, ns)
         self.final_Rg2 = StaticObservables.compute_Rg2(positions, ns)
@@ -171,7 +158,7 @@ class FastRouseSimulation:
         """Run full simulation: init + equilibration + production."""
         print(f"\n{'='*60}")
         print(f"Running N={self.cfg.N}, {self.cfg.n_chains} chains, "
-              f"fast mode (numba+numpy)")
+              f"GPU fast mode (CuPy+CUDA)")
         print(f"{'='*60}")
 
         self.initialize()

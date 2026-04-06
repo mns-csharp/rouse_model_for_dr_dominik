@@ -1,31 +1,41 @@
 """
 SimulationConfig: all physical and simulation parameters for Rouse-model MC.
+
+System is ATHERMAL: excluded-volume energy E is effectively infinite
+(RepulsiveEnergy = 1e6 >> kBT). Any overlapping move is always rejected.
+Temperature is vestigial in the Metropolis criterion — it does not affect
+the accept/reject outcome because exp(-1e6/kBT) = 0 for any finite T.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 import math
 import torch
 
 
 # Physical constants
-SIGMA = 3.8            # Bead diameter (Angstrom)
-L0 = 1.5 * SIGMA      # Equilibrium bond length = 5.7 A
+SIGMA = 3.8            # Bead diameter / Calpha bead diameter d0 (Angstrom)
+L0 = 1.5 * SIGMA      # Equilibrium bond length = 5.7 A (l0/d0 = 1.5, chosen by M.N. Saqib)
 KB = 8.314462e-3       # Boltzmann constant (kJ/(mol*K))
-TEMPERATURE = 300.0    # Kelvin
-KBT = KB * TEMPERATURE # ~2.494 kJ/mol
+# Temperature is vestigial: the system is athermal (E=0 or 1e6).
+# kBT appears in Metropolis criterion but exp(-1e6/kBT) = 0 always rejects overlaps.
+TEMPERATURE = 300.0    # Kelvin (vestigial — does not affect physics)
+KBT = KB * TEMPERATURE # ~2.494 kJ/mol (vestigial)
 
 # Energy parameters (athermal excluded-volume)
-REPULSIVE_ENERGY = 1e6  # kJ/mol  (hard-core repulsion for r < sigma)
-CONTACT_ENERGY = 0.0    # kJ/mol  (no attractive interactions)
+REPULSIVE_ENERGY = 1e6  # kJ/mol  (hard-core repulsion for r < sigma, effectively infinite)
+CONTACT_ENERGY = 0.0    # kJ/mol  (no attractive interactions — purely repulsive / athermal)
 
 # Cutoff radii for 3-zone kernel
 R_REP = SIGMA           # 3.8 A  (repulsive boundary)
 R_MIN = SIGMA           # 3.8 A  (neutral zone starts)
 R_MAX = 2.0 * SIGMA     # 7.6 A  (contact zone ends)
 
-# Volume fraction
-TARGET_PHI = 0.035
+# Density progression: 6 volume fraction levels (dilute → dense)
+PHI_VALUES: List[float] = [0.001, 0.01, 0.05, 0.10, 0.20, 0.30]
+
+# Chain lengths to simulate
+CHAIN_LENGTHS: List[int] = [25, 50, 100, 250, 500]
 
 # Default segment size for segmented multi-step MC
 RESIDUES_PER_SEGMENT = 20
@@ -37,18 +47,64 @@ MAX_ANGLE_PIVOT = math.pi       # Full rotation range for pivot
 # Random seed
 SEED = 42
 
-# Per-chain-length simulation parameters
-# (N, n_chains, eq_sweeps, prod_sweeps, box_size)
+# Legacy per-chain-length configs (single phi=0.035, kept for backward compat)
+# (n_chains, eq_sweeps, prod_sweeps, box_size)
 CHAIN_CONFIGS: Dict[int, Tuple[int, int, int, float]] = {
-    25:  (500, 2000,  5000,  269.6),
-    50:  (500, 5000,  5000,  339.7),
-    100: (500, 5000,  5000,  428.0),
-    250: (200, 10000, 5000,  428.0),
-    500: (110, 25000, 10000, 441.8),
+    25:  (50,  500, 500, 238.0),
+    50:  (50,  500, 500, 238.0),
+    100: (50,  500, 500, 238.0),
+    250: (30,  500, 500, 293.0),
+    500: (20,  500, 500, 440.5),
 }
 
 # Dynamic sampling interval (sweeps between observable snapshots)
-SAMPLE_INTERVAL = 20
+SAMPLE_INTERVAL = 5
+
+# N-dependent sweep schedule: longer chains need far more sweeps to
+# decorrelate (tau_R ~ N^2.18).  These values ensure production runs
+# exceed several tau_R for each chain length.
+SWEEP_SCHEDULE: Dict[int, Tuple[int, int]] = {
+    #  N:  (eq_sweeps, prod_sweeps)
+    25:   ( 2000,   1000),
+    50:   ( 5000,   2000),
+    100:  (10000,   5000),
+    250:  (20000,  15000),
+    500:  (40000,  30000),
+}
+
+
+def compute_n_chains(N: int, phi: float) -> int:
+    """Fixed chain count for all state points.
+
+    10 chains gives reasonable statistical quality for dynamic observables
+    (g_CM, g_R) while keeping computation tractable.
+    """
+    return 20
+
+
+def compute_box_size(N: int, n_chains: int, phi: float) -> float:
+    """Compute cubic box side length from volume fraction.
+
+    L_box = (n_chains * N * sigma^3 / phi)^(1/3)
+
+    A floor of 3 * sigma * N^0.588 (3x RMS end-to-end distance) is applied
+    only for dilute systems (phi < 0.01) where PBC self-interaction matters.
+    In dense systems the box is full of chains and this floor is irrelevant.
+    """
+    sigma3 = SIGMA ** 3
+    box_from_phi = (n_chains * N * sigma3 / phi) ** (1.0 / 3.0)
+    if phi < 0.01:
+        rms_R = SIGMA * (N ** 0.588)
+        return max(box_from_phi, 3.0 * rms_R)
+    return box_from_phi
+
+
+def format_phi(phi: float) -> str:
+    """Format phi for directory/file names: 0.001, 0.01, 0.05, 0.10, 0.20, 0.30."""
+    if phi < 0.01:
+        return f"{phi:.3f}"
+    else:
+        return f"{phi:.2f}"
 
 
 @dataclass
@@ -61,7 +117,7 @@ class SimulationConfig:
     prod_sweeps: int          # Production sweeps
     box_size: float           # Cubic box side length (Angstrom)
     seed: int = SEED
-    device: str = "cpu"       # "cpu" or "cuda"
+    device: str = ""          # REQUIRED: must be set explicitly (no default)
     dtype: torch.dtype = torch.float64
 
     # Physical parameters (fixed)
@@ -73,7 +129,7 @@ class SimulationConfig:
     r_rep: float = R_REP
     r_min: float = R_MIN
     r_max: float = R_MAX
-    target_phi: float = TARGET_PHI
+    target_phi: float = 0.035  # default; overridden by for_state_point()
 
     # MC parameters
     residues_per_segment: int = RESIDUES_PER_SEGMENT
@@ -85,8 +141,15 @@ class SimulationConfig:
     use_batched_mode: bool = False  # batched proposals + delta-E (works on CPU and GPU)
 
     @classmethod
-    def for_chain_length(cls, N: int, device: str = "cpu") -> "SimulationConfig":
-        """Create config for a standard chain length (25, 50, 100, 250, 500)."""
+    def for_chain_length(cls, N: int, device: str) -> "SimulationConfig":
+        """Create config for a standard chain length (legacy single-phi mode).
+
+        Args:
+            N: chain length (must be in CHAIN_CONFIGS)
+            device: torch device string -- REQUIRED, no default
+        """
+        if not device:
+            raise ValueError("device is required (no default). Pass 'cpu' or 'cuda'.")
         n_chains, eq_sweeps, prod_sweeps, box_size = CHAIN_CONFIGS[N]
         return cls(
             N=N,
@@ -95,6 +158,50 @@ class SimulationConfig:
             prod_sweeps=prod_sweeps,
             box_size=box_size,
             device=device,
+        )
+
+    @classmethod
+    def for_state_point(cls, N: int, phi: float, device: str,
+                        eq_sweeps: int | None = None,
+                        prod_sweeps: int | None = None,
+                        ) -> "SimulationConfig":
+        """Create config for a specific (N, phi) state point.
+
+        Computes chain count and box size from the volume fraction formula:
+            L_box = sigma * (n_chains * N / phi)^(1/3)
+
+        Sweep counts default to the N-dependent SWEEP_SCHEDULE so that
+        longer chains get enough sweeps to decorrelate.
+
+        Args:
+            N: beads per chain
+            phi: volume fraction
+            device: torch device string -- REQUIRED, no default
+            eq_sweeps: override equilibration sweeps (None → use schedule)
+            prod_sweeps: override production sweeps (None → use schedule)
+        """
+        if not device:
+            raise ValueError("device is required (no default). Pass 'cpu' or 'cuda'.")
+        n_chains = compute_n_chains(N, phi)
+        box_size = compute_box_size(N, n_chains, phi)
+        # Use N-dependent sweep schedule unless caller overrides
+        sched_eq, sched_prod = SWEEP_SCHEDULE.get(N, (500, 500))
+        if eq_sweeps is None:
+            eq_sweeps = sched_eq
+        if prod_sweeps is None:
+            prod_sweeps = sched_prod
+        # Adaptive sample interval: short chains relax fast, need finer sampling
+        # to resolve tau_R (which is ~N^2.18).
+        si = max(1, min(SAMPLE_INTERVAL, N // 10))
+        return cls(
+            N=N,
+            n_chains=n_chains,
+            eq_sweeps=eq_sweeps,
+            prod_sweeps=prod_sweeps,
+            box_size=box_size,
+            target_phi=phi,
+            device=device,
+            sample_interval=si,
         )
 
     @property
@@ -133,6 +240,11 @@ class SimulationConfig:
 
     def get_torch_device(self) -> torch.device:
         d = self.device
+        if not d:
+            raise ValueError(
+                "SimulationConfig.device is not set. "
+                "Device must be explicitly provided (no default)."
+            )
         if d == "gpu":
             d = "cuda"
         return torch.device(d)

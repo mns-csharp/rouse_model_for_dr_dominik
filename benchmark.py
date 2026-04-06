@@ -1,6 +1,11 @@
 """
 Benchmark: profile perform_sweep for N=25 and N=250 across modes.
 Identifies bottlenecks by timing individual components.
+
+Usage:
+    python -m rouse_model_python.benchmark --device {cpu|gpu|mixed} --is_parallel {true|false}
+
+Both --device and --is_parallel are REQUIRED.
 """
 
 import sys, os, time, random, math
@@ -17,6 +22,7 @@ from rouse_model_python.energy import EnergyComputer
 from rouse_model_python.number_space import NumberSpace
 from rouse_model_python.multistep_mc import perform_sweep, MOVE_SIZE
 from rouse_model_python.simulation import SimulationStats
+from rouse_model_python.execution_policy import parse_execution_args
 
 # ---------------------------------------------------------------------------
 # Monkey-patch timing instrumentation
@@ -69,7 +75,7 @@ def instrument():
     # Rotation helpers
     mcm.rodrigues_rotation_matrix = timed("rodrigues")(mcm.rodrigues_rotation_matrix)
     mcm.random_so3_matrix = timed("random_so3")(mcm.random_so3_matrix)
-    mcm.apply_rotation_to_beads = timed("apply_rotation")(mcm.apply_rotation_to_beads)
+    mcm.apply_rotation_to_beads_unwrapped = timed("apply_rotation")(mcm.apply_rotation_to_beads_unwrapped)
     mcm._batched_rodrigues = timed("batched_rodrigues")(mcm._batched_rodrigues)
 
 
@@ -77,12 +83,19 @@ def set_seeds(seed=SEED):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
+    if torch.cuda.device_count() > 0:
         torch.cuda.manual_seed_all(seed)
 
 
 def run_benchmark(N, device, batched, n_sweeps=5):
-    """Run n_sweeps and return per-sweep time + component breakdown."""
+    """Run n_sweeps and return per-sweep time + component breakdown.
+
+    Args:
+        N: chain length
+        device: torch device string -- explicitly provided, no default
+        batched: whether to use batched energy computation
+        n_sweeps: number of sweeps to benchmark
+    """
     TIMINGS.clear()
     set_seeds()
 
@@ -153,20 +166,30 @@ def print_report(N, device, batched, wall, n_sweeps, timings):
 
 
 def main():
+    policy, caps, cli_args = parse_execution_args()
+
     instrument()
 
-    has_gpu = torch.cuda.is_available()
-    if has_gpu:
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-    else:
-        print("No GPU available — skipping CUDA runs")
+    # Determine which device configs to benchmark based on policy
+    torch_dev = policy.torch_device
+    devices_to_test = [torch_dev]
+    if policy.device == "mixed" and caps.n_gpus > 0:
+        devices_to_test = ["cpu", "cuda"]
+    elif policy.device == "gpu":
+        devices_to_test = ["cuda"]
+    elif policy.device == "cpu":
+        devices_to_test = ["cpu"]
 
     n_sweeps = 5
+    batched_only = policy.use_batched_mode
     configs = []
-    for N in [25, 250]:
-        for device in (["cpu", "cuda"] if has_gpu else ["cpu"]):
-            for batched in [False, True]:
-                configs.append((N, device, batched))
+    for N in [25, 50, 100, 250, 500]:
+        for device in devices_to_test:
+            if batched_only:
+                configs.append((N, device, True))
+            else:
+                for batched in [False, True]:
+                    configs.append((N, device, batched))
 
     results = []
     for N, device, batched in configs:

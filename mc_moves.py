@@ -60,54 +60,65 @@ def random_so3_matrix(gen: torch.Generator, dtype: torch.dtype = torch.float64,
     """
     Generate a uniform random SO(3) rotation matrix.
 
-    Uses the subgroup algorithm: random axis on S² + random angle [0, 2π).
-    Random numbers from torch generator; matrix built with Python scalars.
+    Uses random unit quaternion via two Marsaglia rejection pairs on S³,
+    then converts to a 3x3 rotation matrix.  This produces the Haar-uniform
+    distribution on SO(3), whose rotation-angle marginal is
+    p(θ) = (1 − cos θ) / π  for θ ∈ [0, π].
     """
-    angle = 2.0 * math.pi * torch.rand(1, generator=gen, dtype=dtype, device=device).item()
-
-    # Random axis via Marsaglia method
+    # First Marsaglia pair: (u1, v1) with s1 = u1² + v1² < 1
     while True:
-        u = 2.0 * torch.rand(1, generator=gen, dtype=dtype, device=device).item() - 1.0
-        v = 2.0 * torch.rand(1, generator=gen, dtype=dtype, device=device).item() - 1.0
-        s = u * u + v * v
-        if s < 1.0 and s > 1e-10:
+        u1 = 2.0 * torch.rand(1, generator=gen, dtype=dtype, device=device).item() - 1.0
+        v1 = 2.0 * torch.rand(1, generator=gen, dtype=dtype, device=device).item() - 1.0
+        s1 = u1 * u1 + v1 * v1
+        if s1 < 1.0 and s1 > 1e-10:
             break
-    factor = 2.0 * math.sqrt(1.0 - s)
-    ux = u * factor
-    uy = v * factor
-    uz = 1.0 - 2.0 * s
 
-    # Build rotation matrix directly (scalar Rodrigues)
-    c = math.cos(angle)
-    si = math.sin(angle)
-    t = 1.0 - c
+    # Second Marsaglia pair: (u2, v2) with s2 = u2² + v2² < 1
+    while True:
+        u2 = 2.0 * torch.rand(1, generator=gen, dtype=dtype, device=device).item() - 1.0
+        v2 = 2.0 * torch.rand(1, generator=gen, dtype=dtype, device=device).item() - 1.0
+        s2 = u2 * u2 + v2 * v2
+        if s2 < 1.0 and s2 > 1e-10:
+            break
+
+    # Unit quaternion q = (q0, q1, q2, q3) uniform on S³
+    q0 = u1
+    q1 = v1
+    factor = math.sqrt((1.0 - s1) / s2)
+    q2 = u2 * factor
+    q3 = v2 * factor
+
+    # Quaternion → rotation matrix (direct formula, no normalisation needed)
+    q0q0 = q0 * q0; q1q1 = q1 * q1; q2q2 = q2 * q2; q3q3 = q3 * q3
+    q0q1 = q0 * q1; q0q2 = q0 * q2; q0q3 = q0 * q3
+    q1q2 = q1 * q2; q1q3 = q1 * q3; q2q3 = q2 * q3
 
     return torch.tensor([
-        [t * ux * ux + c,       t * ux * uy - si * uz,  t * ux * uz + si * uy],
-        [t * ux * uy + si * uz, t * uy * uy + c,        t * uy * uz - si * ux],
-        [t * ux * uz - si * uy, t * uy * uz + si * ux,  t * uz * uz + c      ],
+        [q0q0 + q1q1 - q2q2 - q3q3, 2.0*(q1q2 - q0q3),             2.0*(q1q3 + q0q2)],
+        [2.0*(q1q2 + q0q3),          q0q0 - q1q1 + q2q2 - q3q3,    2.0*(q2q3 - q0q1)],
+        [2.0*(q1q3 - q0q2),          2.0*(q2q3 + q0q1),             q0q0 - q1q1 - q2q2 + q3q3],
     ], dtype=dtype, device=device)
 
 
-def apply_rotation_to_beads(positions: torch.Tensor, center: torch.Tensor,
-                             R: torch.Tensor, ns: NumberSpace) -> torch.Tensor:
+def apply_rotation_to_beads_unwrapped(unwrapped: torch.Tensor,
+                                       center: torch.Tensor,
+                                       R: torch.Tensor,
+                                       ns: NumberSpace) -> torch.Tensor:
     """
-    Rotate positions around a center point using rotation matrix R,
-    with MIC displacement and PBC wrapping via NumberSpace.
+    Rotate pre-unwrapped positions around a center point using rotation
+    matrix R, then wrap back into the periodic box.
 
-    Inlines MIC delta to avoid extra function call overhead.
+    Args:
+        unwrapped: [n_beads, 3] sequentially unwrapped positions
+        center: [3] rotation center (anchor bead position)
+        R: [3, 3] rotation matrix
+        ns: NumberSpace for PBC wrapping
+
+    Returns:
+        [n_beads, 3] new wrapped positions
     """
-    box = ns.box_size
-    inv_box = ns._inv_box
-
-    # Inline MIC displacement from center
-    delta = positions - center.unsqueeze(0)
-    delta = delta - box * torch.round(delta * inv_box)
-
-    # Rotate: delta @ R^T (equivalent to R @ delta^T transposed)
-    rotated = torch.mm(delta, R.t())  # [n_beads, 3]
-
-    # New positions = center + rotated, then wrap
+    relative = unwrapped - center.unsqueeze(0)
+    rotated = torch.mm(relative, R.t())
     new_pos = center.unsqueeze(0) + rotated
     return ns.wrap(new_pos)
 
@@ -161,14 +172,25 @@ def propose_hinge_move(state: ChainState, chain_idx: int, seg_start: int,
     axis_bead_b = min(seg_end, N - 1)
 
     pos_a = positions[axis_bead_a]  # [3]
-    pos_b = positions[axis_bead_b]  # [3]
+    old_pos = positions[seg_start:seg_end].clone()
 
-    # Axis direction (scalar MIC)
-    dx, dy, dz = _mic_delta_scalar(pos_a, pos_b, ns.box_size, ns._inv_box)
+    # Sequential unwrap from anchor along chain backbone
+    unwrapped = ns.unwrap_chain_from_anchor(old_pos, pos_a)
+
+    # Axis direction: unwrap bead_b via one more bond past the segment end
+    box = ns.box_size
+    inv_box = ns._inv_box
+    dx_b, dy_b, dz_b = _mic_delta_scalar(
+        positions[seg_end - 1], positions[axis_bead_b], box, inv_box)
+    uw_b_x = unwrapped[-1, 0].item() + dx_b
+    uw_b_y = unwrapped[-1, 1].item() + dy_b
+    uw_b_z = unwrapped[-1, 2].item() + dz_b
+    dx = uw_b_x - pos_a[0].item()
+    dy = uw_b_y - pos_a[1].item()
+    dz = uw_b_z - pos_a[2].item()
     axis_len = math.sqrt(dx * dx + dy * dy + dz * dz)
 
     if axis_len < AXIS_EPS:
-        old_pos = positions[seg_start:seg_end].clone()
         return MoveProposal(chain_idx, seg_start, seg_end, old_pos, old_pos.clone(), 'hinge')
 
     # Random angle in [-max_angle, +max_angle]
@@ -176,8 +198,8 @@ def propose_hinge_move(state: ChainState, chain_idx: int, seg_start: int,
 
     axis = torch.tensor([dx, dy, dz], dtype=dtype, device=device)
     R = rodrigues_rotation_matrix(axis, angle, dtype, device)
-    old_pos = positions[seg_start:seg_end].clone()
-    new_pos = apply_rotation_to_beads(old_pos, pos_a, R, ns)
+
+    new_pos = apply_rotation_to_beads_unwrapped(unwrapped, pos_a, R, ns)
 
     return MoveProposal(chain_idx, seg_start, seg_end, old_pos, new_pos, 'hinge')
 
@@ -234,17 +256,28 @@ def propose_tail_move(state: ChainState, chain_idx: int, seg_start: int,
 
         if axis_len < AXIS_EPS:
             old_pos = positions[move_start:move_end].clone()
+            mtype = 'n_tail' if is_n_terminal else 'c_tail'
             return MoveProposal(chain_idx, move_start, move_end,
-                                old_pos, old_pos.clone(), 'tail')
+                                old_pos, old_pos.clone(), mtype)
 
     angle = (2.0 * torch.rand(1, generator=gen, dtype=dtype, device=device).item() - 1.0) * cfg.max_angle_hinge
     axis = torch.tensor([dx, dy, dz], dtype=dtype, device=device)
     R = rodrigues_rotation_matrix(axis, angle, dtype, device)
 
     old_pos = positions[move_start:move_end].clone()
-    new_pos = apply_rotation_to_beads(old_pos, pos_a, R, ns)
 
-    return MoveProposal(chain_idx, move_start, move_end, old_pos, new_pos, 'tail')
+    # Sequential unwrap from anchor along chain backbone, then rotate.
+    # N-terminal: anchor is after the segment → unwrap in reverse chain
+    #   order so the first unwrapped bead is adjacent to the anchor.
+    # C-terminal: anchor is before the segment → unwrap in forward order.
+    if is_n_terminal:
+        unwrapped = ns.unwrap_chain_from_anchor(old_pos.flip(0), pos_a).flip(0)
+    else:
+        unwrapped = ns.unwrap_chain_from_anchor(old_pos, pos_a)
+    new_pos = apply_rotation_to_beads_unwrapped(unwrapped, pos_a, R, ns)
+
+    mtype = 'n_tail' if is_n_terminal else 'c_tail'
+    return MoveProposal(chain_idx, move_start, move_end, old_pos, new_pos, mtype)
 
 
 def propose_pivot_move(state: ChainState, chain_idx: int,
@@ -702,12 +735,12 @@ def propose_batch_segment_moves(state: ChainState,
             a_idx = min(seg_end, N - 1)
             b_idx = min(seg_end + 1, N - 1)
             move_start, move_end = 0, seg_end
-            mtype = 'tail'
+            mtype = 'n_tail'
         else:  # C_TERMINAL
             a_idx = max(seg_start - 1, 0)
             b_idx = max(seg_start - 2, 0)
             move_start, move_end = seg_start, N
-            mtype = 'tail'
+            mtype = 'c_tail'
 
         meta.append((chain_idx, a_idx, b_idx, move_start, move_end, mtype))
 
@@ -823,12 +856,12 @@ def propose_batch_segment_moves_fused(state: ChainState,
             a_idx = min(seg_end, N - 1)
             b_idx = min(seg_end + 1, N - 1)
             move_start, move_end = 0, seg_end
-            mtype = 'tail'
+            mtype = 'n_tail'
         else:
             a_idx = max(seg_start - 1, 0)
             b_idx = max(seg_start - 2, 0)
             move_start, move_end = seg_start, N
-            mtype = 'tail'
+            mtype = 'c_tail'
         meta.append((chain_idx, a_idx, b_idx, move_start, move_end, mtype))
 
     # Phase 2: GPU batched axes
@@ -867,16 +900,46 @@ def propose_batch_segment_moves_fused(state: ChainState,
               - 1.0) * cfg.max_angle_hinge
     R_batch = _batched_rodrigues(axes, angles, valid_mask)
 
-    # Phase 4: Gather old positions + apply batched rotation
+    # Phase 4: Gather old positions + sequential chain unwrap + rotate
+    #
+    # CRITICAL: Each bead must be unwrapped sequentially along the chain
+    # backbone, NOT independently via per-bead MIC from the anchor.
+    # Per-bead MIC can snap adjacent beads to different PBC images when
+    # the chain wraps around a small box, destroying interior bond lengths
+    # after rotation.
+    #
+    # For hinge/C-tail: anchor is before the segment → forward unwrap
+    # For N-tail: anchor is after the segment → reverse unwrap then flip
     max_moved = max(m[4] - m[3] for m in meta)
 
     old_batch = torch.zeros(B, max_moved, 3, dtype=dtype, device=device)
-    for bi, (ci, _, _, ms, me, _) in enumerate(meta):
+    delta = torch.zeros(B, max_moved, 3, dtype=dtype, device=device)
+
+    for bi, (ci, a_idx, _, ms, me, mtype) in enumerate(meta):
         nm = me - ms
         old_batch[bi, :nm] = state.positions[ci, ms:me]
 
-    delta = old_batch - pos_a[:, None, :]
-    delta = delta - box * torch.round(delta * inv_box)
+        if nm == 0:
+            continue
+
+        # Get anchor position (already computed as pos_a[bi])
+        anchor = pos_a[bi]
+
+        if mtype == 'n_tail':
+            # Anchor is after the segment: unwrap backward (last bead first)
+            beads = state.positions[ci, ms:me].flip(0)
+        else:
+            # Anchor is before the segment: unwrap forward
+            beads = state.positions[ci, ms:me]
+
+        # Sequential unwrap: bead 0 from anchor, bead k from bead k-1
+        uw = ns.unwrap_chain_from_anchor(beads, anchor)
+
+        if mtype == 'n_tail':
+            uw = uw.flip(0)  # restore original chain order
+
+        delta[bi, :nm] = uw - anchor.unsqueeze(0)
+
     rotated = torch.bmm(delta, R_batch.transpose(1, 2))
     new_batch = pos_a[:, None, :] + rotated
     new_batch = ns.wrap(new_batch)
