@@ -1,0 +1,16 @@
+# Execution-policy tuning for libs/execution/*.
+# Consumed by libs/config/execution_tuning.py::ExecutionTuning.
+
+[device]
+default = "cpu"
+
+[parallel]
+step_size_serial   = 1
+step_size_parallel = 20
+
+[gpu_tuning]
+speedup_factor = 8.0
+overhead_beads = 500
+
+[torch_compile]
+mode = "default"

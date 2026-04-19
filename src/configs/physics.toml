@@ -1,0 +1,15 @@
+# Physical constants for the Rouse-model Monte Carlo simulation.
+# All values are consumed by libs/config/physical_constants.py::PhysicalConstants.
+
+[physics]
+sigma              = 3.8          # bead diameter d0 (Angstrom)
+l0                 = 3.8          # bond equilibrium length (= sigma; beads just touching)
+boltzmann_constant = 8.314462e-3  # kJ/(mol*K)
+temperature        = 300.0        # K  (vestigial for athermal system)
+repulsive_energy   = 1e6          # kJ/mol  (excluded-volume hard core, effectively infinite)
+contact_energy     = 0.0          # kJ/mol  (no attractive contact; purely repulsive)
+
+[cutoffs]
+r_rep = 3.8   # repulsive-zone radius (= sigma)
+r_min = 3.8   # neutral-zone inner radius (= sigma)
+r_max = 7.6   # neutral/contact-zone outer radius (= 2 * sigma)
