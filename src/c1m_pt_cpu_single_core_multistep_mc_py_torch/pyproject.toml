@@ -1,0 +1,11 @@
+[project]
+name = "c1m_pt_cpu_single_core_multistep_mc_py_torch"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pyooptool]
+dl-framework = "pytorch"
+dl-variant = "app"
+interface-style = "protocol"
+kind = "deep-learning"

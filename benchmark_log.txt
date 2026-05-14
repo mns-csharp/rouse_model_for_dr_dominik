@@ -1,0 +1,609 @@
+[2026-05-12 22:15:09] === RUNNER START === phase=preflight apps=27 eq=100 prod=100 K=10 seed=42
+[2026-05-12 22:15:09] === PHASE 1 PRE-FLIGHT === apps=27
+[2026-05-12 22:15:09] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba
+[2026-05-12 22:15:18] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba status=ok wall=9.0s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:15:18] [preflight] c1c_pt_cpu_single_core_conventional_mc_py_torch
+[2026-05-12 22:15:57] [preflight] c1c_pt_cpu_single_core_conventional_mc_py_torch status=ok wall=39.5s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:15:57] [preflight] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled
+[2026-05-12 22:17:08] [preflight] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled status=ok wall=70.8s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:17:08] [preflight] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused
+[2026-05-12 22:17:34] [preflight] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused status=ok wall=25.7s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:17:34] [preflight] c1m_nb_cpu_single_core_multistep_mc_numba
+[2026-05-12 22:17:42] [preflight] c1m_nb_cpu_single_core_multistep_mc_numba status=ok wall=8.3s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:17:42] [preflight] c1m_pt_cpu_single_core_multistep_mc_py_torch
+[2026-05-12 22:19:32] [preflight] c1m_pt_cpu_single_core_multistep_mc_py_torch status=ok wall=109.8s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:19:32] [preflight] cnc_nb_cpu_multi_core_conventional_mc_numba
+[2026-05-12 22:19:45] [preflight] cnc_nb_cpu_multi_core_conventional_mc_numba status=ok wall=13.3s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:19:45] [preflight] cnc_pt_cpu_multi_core_conventional_mc_py_torch
+[2026-05-12 22:20:27] [preflight] cnc_pt_cpu_multi_core_conventional_mc_py_torch status=ok wall=42.1s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:20:27] [preflight] cnm_nb_cpu_multi_core_multistep_mc_numba
+[2026-05-12 22:20:39] [preflight] cnm_nb_cpu_multi_core_multistep_mc_numba status=ok wall=11.8s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:20:39] [preflight] cnm_pt_cpu_multi_core_multistep_mc_py_torch
+[2026-05-12 22:22:36] [preflight] cnm_pt_cpu_multi_core_multistep_mc_py_torch status=ok wall=116.3s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:22:36] [preflight] g1c_cc_gpu_single_thread_conventional_mc_cuda_c
+[2026-05-12 22:22:44] [preflight] g1c_cc_gpu_single_thread_conventional_mc_cuda_c status=ok wall=8.9s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:22:44] [preflight] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list
+[2026-05-12 22:22:56] [preflight] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list status=ok wall=11.2s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:22:56] [preflight] g1c_pt_gpu_single_thread_conventional_mc_py_torch
+[2026-05-12 22:25:17] [preflight] g1c_pt_gpu_single_thread_conventional_mc_py_torch status=ok wall=140.9s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:25:17] [preflight] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-12 22:25:42] [preflight] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused status=ok wall=25.5s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:25:42] [preflight] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-12 22:26:23] [preflight] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list status=ok wall=41.2s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:26:23] [preflight] g1m_cc_gpu_single_thread_multistep_mc_cuda_c
+[2026-05-12 22:26:30] [preflight] g1m_cc_gpu_single_thread_multistep_mc_cuda_c status=ok wall=7.0s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:26:30] [preflight] g1m_pt_gpu_single_thread_multistep_mc_py_torch
+[2026-05-12 22:35:53] [preflight] g1m_pt_gpu_single_thread_multistep_mc_py_torch status=ok wall=562.9s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:35:53] [preflight] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-12 22:36:19] [preflight] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused status=ok wall=25.9s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:36:19] [preflight] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-12 22:36:54] [preflight] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list status=ok wall=35.0s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:36:54] [preflight] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c
+[2026-05-12 22:37:01] [preflight] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c status=ok wall=7.0s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:37:01] [preflight] gnc_pt_gpu_multi_thread_conventional_mc_py_torch
+[2026-05-12 22:39:57] [preflight] gnc_pt_gpu_multi_thread_conventional_mc_py_torch status=ok wall=176.2s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:39:57] [preflight] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-12 22:40:43] [preflight] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused status=ok wall=45.5s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:40:43] [preflight] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-12 22:41:55] [preflight] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list status=ok wall=72.1s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-12 22:41:55] [preflight] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c
+[2026-05-12 22:42:02] [preflight] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c status=ok wall=6.5s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:42:02] [preflight] gnm_pt_gpu_multi_thread_multistep_mc_py_torch
+[2026-05-12 22:51:35] [preflight] gnm_pt_gpu_multi_thread_multistep_mc_py_torch status=ok wall=573.3s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:51:35] [preflight] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-12 22:52:31] [preflight] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused status=ok wall=56.0s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:52:31] [preflight] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-12 22:53:45] [preflight] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list status=ok wall=74.0s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-12 22:53:45] === PHASE 1 PRE-FLIGHT DONE === apps_pass=27 apps_fail=0
+[2026-05-12 22:53:45] === RUNNER DONE === wall=2316.1s
+[2026-05-12 22:54:13] === RUNNER START === phase=benchmark apps=27 eq=100 prod=100 K=10 seed=42
+[2026-05-12 22:54:13] === PHASE 2 BENCHMARK === apps=27 cells_per_app=3
+[2026-05-12 22:54:13] [benchmark] baseline FIRST: c1c_nb_cpu_single_core_conventional_mc_numba
+[2026-05-12 22:54:13] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=25 K=10
+[2026-05-12 22:54:22] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=25 K=10 status=ok wall=8.6s
+[2026-05-12 22:54:22] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=50 K=10
+[2026-05-12 22:54:36] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=50 K=10 status=ok wall=13.8s
+[2026-05-12 22:54:36] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=100 K=10
+[2026-05-12 22:55:18] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=100 K=10 status=ok wall=42.0s
+[2026-05-12 22:55:18] [benchmark] c1c_pt_cpu_single_core_conventional_mc_py_torch
+[2026-05-12 22:55:18] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=25 K=10
+[2026-05-12 22:55:57] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=25 K=10 status=ok wall=39.0s
+[2026-05-12 22:55:57] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=50 K=10
+[2026-05-12 22:57:22] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=50 K=10 status=ok wall=84.8s
+[2026-05-12 22:57:22] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=100 K=10
+[2026-05-12 23:01:26] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=100 K=10 status=ok wall=244.2s
+[2026-05-12 23:01:26] [benchmark] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled
+[2026-05-12 23:01:26] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=25 K=10
+[2026-05-12 23:02:14] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=25 K=10 status=ok wall=48.0s
+[2026-05-12 23:02:14] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=50 K=10
+[2026-05-12 23:03:50] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=50 K=10 status=ok wall=96.1s
+[2026-05-12 23:03:50] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=100 K=10
+[2026-05-12 23:07:59] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=100 K=10 status=ok wall=249.0s
+[2026-05-12 23:07:59] [benchmark] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused
+[2026-05-12 23:07:59] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=25 K=10
+[2026-05-12 23:08:24] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=25 K=10 status=ok wall=25.0s
+[2026-05-12 23:08:24] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=50 K=10
+[2026-05-12 23:09:19] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=50 K=10 status=ok wall=54.9s
+[2026-05-12 23:09:19] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=100 K=10
+[2026-05-12 23:12:33] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=100 K=10 status=ok wall=193.8s
+[2026-05-12 23:12:33] [benchmark] c1m_nb_cpu_single_core_multistep_mc_numba
+[2026-05-12 23:12:33] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=25 K=10
+[2026-05-12 23:12:41] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=25 K=10 status=ok wall=8.5s
+[2026-05-12 23:12:41] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=50 K=10
+[2026-05-12 23:12:54] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=50 K=10 status=ok wall=12.4s
+[2026-05-12 23:12:54] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=100 K=10
+[2026-05-12 23:13:29] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=100 K=10 status=ok wall=35.5s
+[2026-05-12 23:13:29] [benchmark] c1m_pt_cpu_single_core_multistep_mc_py_torch
+[2026-05-12 23:13:29] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=25 K=10
+[2026-05-12 23:15:24] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=25 K=10 status=ok wall=114.7s
+[2026-05-12 23:15:24] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=50 K=10
+[2026-05-12 23:19:05] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=50 K=10 status=ok wall=220.8s
+[2026-05-12 23:19:05] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=100 K=10
+[2026-05-12 23:27:06] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=100 K=10 status=ok wall=481.6s
+[2026-05-12 23:27:06] [benchmark] cnc_nb_cpu_multi_core_conventional_mc_numba
+[2026-05-12 23:27:06] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=25 K=10
+[2026-05-12 23:27:20] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=25 K=10 status=ok wall=13.4s
+[2026-05-12 23:27:20] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=50 K=10
+[2026-05-12 23:27:43] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=50 K=10 status=ok wall=23.6s
+[2026-05-12 23:27:43] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=100 K=10
+[2026-05-12 23:28:41] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=100 K=10 status=ok wall=58.0s
+[2026-05-12 23:28:41] [benchmark] cnc_pt_cpu_multi_core_conventional_mc_py_torch
+[2026-05-12 23:28:41] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=25 K=10
+[2026-05-12 23:29:26] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=25 K=10 status=ok wall=44.9s
+[2026-05-12 23:29:26] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=50 K=10
+[2026-05-12 23:31:03] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=50 K=10 status=ok wall=97.2s
+[2026-05-12 23:31:03] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=100 K=10
+[2026-05-12 23:35:34] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=100 K=10 status=ok wall=270.5s
+[2026-05-12 23:35:34] [benchmark] cnm_nb_cpu_multi_core_multistep_mc_numba
+[2026-05-12 23:35:34] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=25 K=10
+[2026-05-12 23:35:46] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=25 K=10 status=ok wall=12.0s
+[2026-05-12 23:35:46] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=50 K=10
+[2026-05-12 23:36:05] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=50 K=10 status=ok wall=19.0s
+[2026-05-12 23:36:05] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=100 K=10
+[2026-05-12 23:36:51] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=100 K=10 status=ok wall=45.8s
+[2026-05-12 23:36:51] [benchmark] cnm_pt_cpu_multi_core_multistep_mc_py_torch
+[2026-05-12 23:36:51] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=25 K=10
+[2026-05-12 23:39:02] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=25 K=10 status=ok wall=131.1s
+[2026-05-12 23:39:02] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=50 K=10
+[2026-05-12 23:42:59] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=50 K=10 status=ok wall=237.7s
+[2026-05-12 23:42:59] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=100 K=10
+[2026-05-12 23:51:41] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=100 K=10 status=ok wall=521.2s
+[2026-05-12 23:51:41] [benchmark] g1c_cc_gpu_single_thread_conventional_mc_cuda_c
+[2026-05-12 23:51:41] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=25 K=10
+[2026-05-12 23:51:47] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=25 K=10 status=ok wall=6.4s
+[2026-05-12 23:51:47] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=50 K=10
+[2026-05-12 23:51:54] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=50 K=10 status=ok wall=6.8s
+[2026-05-12 23:51:54] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=100 K=10
+[2026-05-12 23:52:01] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=100 K=10 status=ok wall=7.3s
+[2026-05-12 23:52:01] [benchmark] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list
+[2026-05-12 23:52:01] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=25 K=10
+[2026-05-12 23:52:12] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=25 K=10 status=ok wall=10.9s
+[2026-05-12 23:52:12] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=50 K=10
+[2026-05-12 23:52:26] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=50 K=10 status=ok wall=14.2s
+[2026-05-12 23:52:26] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=100 K=10
+[2026-05-12 23:52:48] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=100 K=10 status=ok wall=21.1s
+[2026-05-12 23:52:48] [benchmark] g1c_pt_gpu_single_thread_conventional_mc_py_torch
+[2026-05-12 23:52:48] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=25 K=10
+[2026-05-12 23:56:11] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=25 K=10 status=ok wall=203.3s
+[2026-05-12 23:56:11] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=50 K=10
+[2026-05-13 00:01:12] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=50 K=10 status=ok wall=301.3s
+[2026-05-13 00:01:12] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=100 K=10
+[2026-05-13 00:09:16] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=100 K=10 status=ok wall=483.8s
+[2026-05-13 00:09:16] [benchmark] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-13 00:09:16] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=25 K=10
+[2026-05-13 00:09:39] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=25 K=10 status=ok wall=23.0s
+[2026-05-13 00:09:39] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=50 K=10
+[2026-05-13 00:10:20] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=50 K=10 status=ok wall=41.1s
+[2026-05-13 00:10:20] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=100 K=10
+[2026-05-13 00:11:06] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=100 K=10 status=ok wall=46.0s
+[2026-05-13 00:11:06] [benchmark] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 00:11:06] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=10
+[2026-05-13 00:11:38] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=10 status=ok wall=31.4s
+[2026-05-13 00:11:38] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=10
+[2026-05-13 00:12:39] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=10 status=ok wall=61.8s
+[2026-05-13 00:12:39] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=10
+[2026-05-13 00:13:51] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=10 status=ok wall=72.1s
+[2026-05-13 00:13:51] [benchmark] g1m_cc_gpu_single_thread_multistep_mc_cuda_c
+[2026-05-13 00:13:51] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=25 K=10
+[2026-05-13 00:13:58] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=25 K=10 status=ok wall=6.4s
+[2026-05-13 00:13:58] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=50 K=10
+[2026-05-13 00:14:05] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=50 K=10 status=ok wall=6.7s
+[2026-05-13 00:14:05] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=100 K=10
+[2026-05-13 00:14:12] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=100 K=10 status=ok wall=7.1s
+[2026-05-13 00:14:12] [benchmark] g1m_pt_gpu_single_thread_multistep_mc_py_torch
+[2026-05-13 00:14:12] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=25 K=10
+[2026-05-13 00:24:27] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=25 K=10 status=ok wall=615.6s
+[2026-05-13 00:24:27] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=50 K=10
+[2026-05-13 00:40:14] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=50 K=10 status=ok wall=946.6s
+[2026-05-13 00:40:14] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=100 K=10
+[2026-05-13 01:00:14] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=100 K=10 status=timeout wall=1200.1s
+[2026-05-13 01:00:14] [benchmark] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-13 01:00:14] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=25 K=10
+[2026-05-13 01:00:40] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=25 K=10 status=ok wall=25.8s
+[2026-05-13 01:00:40] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=50 K=10
+[2026-05-13 01:01:17] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=50 K=10 status=ok wall=37.1s
+[2026-05-13 01:01:17] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=100 K=10
+[2026-05-13 01:02:11] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=100 K=10 status=ok wall=54.1s
+[2026-05-13 01:02:11] [benchmark] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 01:02:11] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=10
+[2026-05-13 01:02:45] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=10 status=ok wall=34.3s
+[2026-05-13 01:02:45] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=10
+[2026-05-13 01:03:34] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=10 status=ok wall=48.4s
+[2026-05-13 01:03:34] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=10
+[2026-05-13 01:04:56] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=10 status=ok wall=81.9s
+[2026-05-13 01:04:56] [benchmark] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c
+[2026-05-13 01:04:56] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=25 K=10
+[2026-05-13 01:05:02] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=25 K=10 status=ok wall=6.6s
+[2026-05-13 01:05:02] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=50 K=10
+[2026-05-13 01:05:09] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=50 K=10 status=ok wall=6.9s
+[2026-05-13 01:05:09] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=100 K=10
+[2026-05-13 01:05:16] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=100 K=10 status=ok wall=7.1s
+[2026-05-13 01:05:16] [benchmark] gnc_pt_gpu_multi_thread_conventional_mc_py_torch
+[2026-05-13 01:05:16] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=25 K=10
+[2026-05-13 01:08:20] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=25 K=10 status=ok wall=183.2s
+[2026-05-13 01:08:20] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=50 K=10
+[2026-05-13 01:12:11] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=50 K=10 status=ok wall=231.2s
+[2026-05-13 01:12:11] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=100 K=10
+[2026-05-13 01:19:31] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=100 K=10 status=ok wall=440.3s
+[2026-05-13 01:19:31] [benchmark] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-13 01:19:31] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=25 K=10
+[2026-05-13 01:20:17] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=25 K=10 status=ok wall=45.5s
+[2026-05-13 01:20:17] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=50 K=10
+[2026-05-13 01:21:45] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=50 K=10 status=ok wall=88.4s
+[2026-05-13 01:21:45] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=100 K=10
+[2026-05-13 01:23:42] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=100 K=10 status=ok wall=116.7s
+[2026-05-13 01:23:42] [benchmark] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 01:23:42] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=10
+[2026-05-13 01:24:47] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=10 status=ok wall=65.5s
+[2026-05-13 01:24:47] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=10
+[2026-05-13 01:27:05] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=10 status=ok wall=138.1s
+[2026-05-13 01:27:05] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=10
+[2026-05-13 01:30:15] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=10 status=ok wall=189.4s
+[2026-05-13 01:30:15] [benchmark] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c
+[2026-05-13 01:30:15] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=25 K=10
+[2026-05-13 01:30:21] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=25 K=10 status=ok wall=6.5s
+[2026-05-13 01:30:21] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=50 K=10
+[2026-05-13 01:30:28] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=50 K=10 status=ok wall=6.6s
+[2026-05-13 01:30:28] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=100 K=10
+[2026-05-13 01:30:35] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=100 K=10 status=ok wall=7.1s
+[2026-05-13 01:30:35] [benchmark] gnm_pt_gpu_multi_thread_multistep_mc_py_torch
+[2026-05-13 01:30:35] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=25 K=10
+[2026-05-13 01:39:31] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=25 K=10 status=ok wall=536.3s
+[2026-05-13 01:39:31] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=50 K=10
+[2026-05-13 01:56:35] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=50 K=10 status=ok wall=1024.2s
+[2026-05-13 01:56:35] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=100 K=10
+[2026-05-13 02:16:36] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=100 K=10 status=timeout wall=1200.2s
+[2026-05-13 02:16:36] [benchmark] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-13 02:16:36] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=25 K=10
+[2026-05-13 02:17:25] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=25 K=10 status=ok wall=48.9s
+[2026-05-13 02:17:25] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=50 K=10
+[2026-05-13 02:18:35] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=50 K=10 status=ok wall=71.0s
+[2026-05-13 02:18:35] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=100 K=10
+[2026-05-13 02:20:38] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=100 K=10 status=ok wall=122.1s
+[2026-05-13 02:20:38] [benchmark] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 02:20:38] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=10
+[2026-05-13 02:21:52] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=10 status=ok wall=74.1s
+[2026-05-13 02:21:52] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=10
+[2026-05-13 02:23:45] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=10 status=ok wall=113.7s
+[2026-05-13 02:23:45] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=10
+[2026-05-13 02:27:05] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=10 status=ok wall=199.4s
+[2026-05-13 02:27:05] === PHASE 2 BENCHMARK DONE === records=27
+[2026-05-13 02:27:05] === RUNNER DONE === wall=12771.3s
+[2026-05-13 02:27:17] === RUNNER START === phase=outputs apps=27 eq=100 prod=100 K=10 seed=42
+[2026-05-13 02:27:17] === PHASE 3 PLOTS & TABLES ===
+[2026-05-13 02:27:17] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (82 rows)
+[2026-05-13 02:27:18] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-13 02:27:19] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-13 02:27:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-13 02:27:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-13 02:27:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-13 02:27:20] === RUNNER DONE === wall=3.3s
+[2026-05-13 02:29:02] === RUNNER START === phase=outputs apps=27 eq=100 prod=100 K=10 seed=42
+[2026-05-13 02:29:02] === PHASE 3 PLOTS & TABLES ===
+[2026-05-13 02:29:02] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (82 rows)
+[2026-05-13 02:29:04] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-13 02:29:05] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-13 02:29:05] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-13 02:29:06] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-13 02:29:06] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-13 02:29:06] === RUNNER DONE === wall=3.9s
+[2026-05-13 06:27:17] === RUNNER START === phase=preflight apps=27 eq=100 prod=100 K=100 seed=42
+[2026-05-13 06:27:17] === PHASE 1 PRE-FLIGHT === apps=27
+[2026-05-13 06:27:17] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba
+[2026-05-13 06:29:28] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba status=ok wall=131.7s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 06:29:28] [preflight] c1c_pt_cpu_single_core_conventional_mc_py_torch
+[2026-05-13 06:47:17] [preflight] c1c_pt_cpu_single_core_conventional_mc_py_torch status=ok wall=1068.8s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 06:47:17] [preflight] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled
+[2026-05-13 07:05:45] [preflight] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled status=ok wall=1107.8s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 07:05:45] [preflight] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused
+[2026-05-13 07:55:10] [preflight] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused status=ok wall=2965.3s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 07:55:10] [preflight] c1m_nb_cpu_single_core_multistep_mc_numba
+[2026-05-13 07:57:01] [preflight] c1m_nb_cpu_single_core_multistep_mc_numba status=ok wall=111.0s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 07:57:01] [preflight] c1m_pt_cpu_single_core_multistep_mc_py_torch
+[2026-05-13 10:49:04] [preflight] c1m_pt_cpu_single_core_multistep_mc_py_torch status=ok wall=10322.8s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 10:49:04] [preflight] cnc_nb_cpu_multi_core_conventional_mc_numba
+[2026-05-13 11:19:59] === RUNNER START === phase=preflight apps=27 eq=100 prod=100 K=100 seed=42
+[2026-05-13 11:19:59] === PHASE 1 PRE-FLIGHT === apps=27
+[2026-05-13 11:19:59] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba
+[2026-05-13 11:23:11] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba status=ok wall=191.7s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 11:23:11] [preflight] c1c_pt_cpu_single_core_conventional_mc_py_torch
+[2026-05-13 11:43:19] === RUNNER START === phase=all apps=27 eq=100 prod=100 K=20 seed=42
+[2026-05-13 11:43:19] === PHASE 1 PRE-FLIGHT === apps=27
+[2026-05-13 11:43:19] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba
+[2026-05-13 11:43:45] [preflight] c1c_nb_cpu_single_core_conventional_mc_numba status=ok wall=26.5s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 11:43:45] [preflight] c1c_pt_cpu_single_core_conventional_mc_py_torch
+[2026-05-13 11:45:15] [preflight] c1c_pt_cpu_single_core_conventional_mc_py_torch status=ok wall=89.6s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 11:45:15] [preflight] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled
+[2026-05-13 11:46:59] [preflight] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled status=ok wall=104.0s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 11:46:59] [preflight] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused
+[2026-05-13 11:48:00] [preflight] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused status=ok wall=60.9s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 11:48:00] [preflight] c1m_nb_cpu_single_core_multistep_mc_numba
+[2026-05-13 11:48:26] [preflight] c1m_nb_cpu_single_core_multistep_mc_numba status=ok wall=26.4s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 11:48:26] [preflight] c1m_pt_cpu_single_core_multistep_mc_py_torch
+[2026-05-13 11:55:57] [preflight] c1m_pt_cpu_single_core_multistep_mc_py_torch status=ok wall=450.2s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 11:55:57] [preflight] cnc_nb_cpu_multi_core_conventional_mc_numba
+[2026-05-13 11:56:48] [preflight] cnc_nb_cpu_multi_core_conventional_mc_numba status=ok wall=50.9s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 11:56:48] [preflight] cnc_pt_cpu_multi_core_conventional_mc_py_torch
+[2026-05-13 11:58:35] [preflight] cnc_pt_cpu_multi_core_conventional_mc_py_torch status=ok wall=107.7s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 11:58:35] [preflight] cnm_nb_cpu_multi_core_multistep_mc_numba
+[2026-05-13 11:59:19] [preflight] cnm_nb_cpu_multi_core_multistep_mc_numba status=ok wall=43.6s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 11:59:19] [preflight] cnm_pt_cpu_multi_core_multistep_mc_py_torch
+[2026-05-13 12:06:44] [preflight] cnm_pt_cpu_multi_core_multistep_mc_py_torch status=ok wall=445.4s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 12:06:44] [preflight] g1c_cc_gpu_single_thread_conventional_mc_cuda_c
+[2026-05-13 12:06:53] [preflight] g1c_cc_gpu_single_thread_conventional_mc_cuda_c status=ok wall=9.0s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:06:53] [preflight] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list
+[2026-05-13 12:07:06] [preflight] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list status=ok wall=12.6s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:07:06] [preflight] g1c_pt_gpu_single_thread_conventional_mc_py_torch
+[2026-05-13 12:11:37] [preflight] g1c_pt_gpu_single_thread_conventional_mc_py_torch status=ok wall=270.9s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:11:37] [preflight] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-13 12:12:14] [preflight] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused status=ok wall=36.7s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:12:14] [preflight] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 12:13:09] [preflight] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list status=ok wall=54.9s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:13:09] [preflight] g1m_cc_gpu_single_thread_multistep_mc_cuda_c
+[2026-05-13 12:13:15] [preflight] g1m_cc_gpu_single_thread_multistep_mc_cuda_c status=ok wall=6.8s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 12:13:15] [preflight] g1m_pt_gpu_single_thread_multistep_mc_py_torch
+[2026-05-13 12:45:21] [preflight] g1m_pt_gpu_single_thread_multistep_mc_py_torch status=ok wall=1925.6s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 12:45:21] [preflight] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-13 12:45:50] [preflight] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused status=ok wall=29.0s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 12:45:50] [preflight] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 12:46:25] [preflight] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list status=ok wall=35.2s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 12:46:25] [preflight] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c
+[2026-05-13 12:46:32] [preflight] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c status=ok wall=6.9s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:46:32] [preflight] gnc_pt_gpu_multi_thread_conventional_mc_py_torch
+[2026-05-13 12:51:06] [preflight] gnc_pt_gpu_multi_thread_conventional_mc_py_torch status=ok wall=273.8s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:51:06] [preflight] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-13 12:52:03] [preflight] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused status=ok wall=56.8s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:52:03] [preflight] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 12:53:29] [preflight] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list status=ok wall=86.3s gates_pass=9 gates_na=2 gates_fail=0
+[2026-05-13 12:53:29] [preflight] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c
+[2026-05-13 12:53:36] [preflight] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c status=ok wall=7.1s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 12:53:36] [preflight] gnm_pt_gpu_multi_thread_multistep_mc_py_torch
+[2026-05-13 13:26:05] [preflight] gnm_pt_gpu_multi_thread_multistep_mc_py_torch status=ok wall=1948.8s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 13:26:05] [preflight] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-13 13:26:55] [preflight] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused status=ok wall=49.5s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 13:26:55] [preflight] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 13:28:05] [preflight] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list status=ok wall=70.6s gates_pass=11 gates_na=0 gates_fail=0
+[2026-05-13 13:28:05] === PHASE 1 PRE-FLIGHT DONE === apps_pass=27 apps_fail=0
+[2026-05-13 13:28:05] === PHASE 2 BENCHMARK === apps=27 cells_per_app=3
+[2026-05-13 13:28:05] [benchmark] baseline FIRST: c1c_nb_cpu_single_core_conventional_mc_numba
+[2026-05-13 13:28:05] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=25 K=20
+[2026-05-13 13:28:32] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=25 K=20 status=ok wall=26.6s
+[2026-05-13 13:28:32] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=50 K=20
+[2026-05-13 13:29:27] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=50 K=20 status=ok wall=55.5s
+[2026-05-13 13:29:27] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=100 K=20
+[2026-05-13 13:31:44] [bench] c1c_nb_cpu_single_core_conventional_mc_numba N=100 K=20 status=ok wall=137.0s
+[2026-05-13 13:31:44] [benchmark] c1c_pt_cpu_single_core_conventional_mc_py_torch
+[2026-05-13 13:31:44] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=25 K=20
+[2026-05-13 13:33:17] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=25 K=20 status=ok wall=93.2s
+[2026-05-13 13:33:17] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=50 K=20
+[2026-05-13 13:37:07] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=50 K=20 status=ok wall=229.8s
+[2026-05-13 13:37:07] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=100 K=20
+[2026-05-13 13:48:31] [bench] c1c_pt_cpu_single_core_conventional_mc_py_torch N=100 K=20 status=ok wall=683.5s
+[2026-05-13 13:48:31] [benchmark] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled
+[2026-05-13 13:48:31] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=25 K=20
+[2026-05-13 13:50:10] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=25 K=20 status=ok wall=99.0s
+[2026-05-13 13:50:10] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=50 K=20
+[2026-05-13 13:54:11] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=50 K=20 status=ok wall=241.1s
+[2026-05-13 13:54:11] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=100 K=20
+[2026-05-13 14:05:46] [bench] c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled N=100 K=20 status=ok wall=695.2s
+[2026-05-13 14:05:46] [benchmark] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused
+[2026-05-13 14:05:46] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=25 K=20
+[2026-05-13 14:06:45] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=25 K=20 status=ok wall=59.1s
+[2026-05-13 14:06:45] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=50 K=20
+[2026-05-13 14:09:56] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=50 K=20 status=ok wall=191.3s
+[2026-05-13 14:09:56] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=100 K=20
+[2026-05-13 14:21:08] [bench] c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused N=100 K=20 status=ok wall=671.3s
+[2026-05-13 14:21:08] [benchmark] c1m_nb_cpu_single_core_multistep_mc_numba
+[2026-05-13 14:21:08] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=25 K=20
+[2026-05-13 14:21:34] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=25 K=20 status=ok wall=26.4s
+[2026-05-13 14:21:34] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=50 K=20
+[2026-05-13 14:22:34] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=50 K=20 status=ok wall=59.3s
+[2026-05-13 14:22:34] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=100 K=20
+[2026-05-13 14:24:43] [bench] c1m_nb_cpu_single_core_multistep_mc_numba N=100 K=20 status=ok wall=129.7s
+[2026-05-13 14:24:43] [benchmark] c1m_pt_cpu_single_core_multistep_mc_py_torch
+[2026-05-13 14:24:43] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=25 K=20
+[2026-05-13 14:32:09] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=25 K=20 status=ok wall=445.6s
+[2026-05-13 14:32:09] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=50 K=20
+[2026-05-13 14:44:56] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=50 K=20 status=ok wall=767.5s
+[2026-05-13 14:44:56] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=100 K=20
+[2026-05-13 15:15:55] [bench] c1m_pt_cpu_single_core_multistep_mc_py_torch N=100 K=20 status=ok wall=1858.6s
+[2026-05-13 15:15:55] [benchmark] cnc_nb_cpu_multi_core_conventional_mc_numba
+[2026-05-13 15:15:55] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=25 K=20
+[2026-05-13 15:16:45] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=25 K=20 status=ok wall=50.1s
+[2026-05-13 15:16:45] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=50 K=20
+[2026-05-13 15:18:14] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=50 K=20 status=ok wall=89.3s
+[2026-05-13 15:18:14] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=100 K=20
+[2026-05-13 15:21:28] [bench] cnc_nb_cpu_multi_core_conventional_mc_numba N=100 K=20 status=ok wall=194.0s
+[2026-05-13 15:21:28] [benchmark] cnc_pt_cpu_multi_core_conventional_mc_py_torch
+[2026-05-13 15:21:28] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=25 K=20
+[2026-05-13 15:23:13] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=25 K=20 status=ok wall=105.1s
+[2026-05-13 15:23:13] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=50 K=20
+[2026-05-13 15:27:55] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=50 K=20 status=ok wall=281.3s
+[2026-05-13 15:27:55] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=100 K=20
+[2026-05-13 15:37:22] [bench] cnc_pt_cpu_multi_core_conventional_mc_py_torch N=100 K=20 status=ok wall=567.0s
+[2026-05-13 15:37:22] [benchmark] cnm_nb_cpu_multi_core_multistep_mc_numba
+[2026-05-13 15:37:22] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=25 K=20
+[2026-05-13 15:38:05] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=25 K=20 status=ok wall=43.5s
+[2026-05-13 15:38:05] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=50 K=20
+[2026-05-13 15:39:20] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=50 K=20 status=ok wall=74.6s
+[2026-05-13 15:39:20] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=100 K=20
+[2026-05-13 15:41:51] [bench] cnm_nb_cpu_multi_core_multistep_mc_numba N=100 K=20 status=ok wall=151.7s
+[2026-05-13 15:41:51] [benchmark] cnm_pt_cpu_multi_core_multistep_mc_py_torch
+[2026-05-13 15:41:51] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=25 K=20
+[2026-05-13 15:49:20] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=25 K=20 status=ok wall=448.7s
+[2026-05-13 15:49:20] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=50 K=20
+[2026-05-13 16:06:00] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=50 K=20 status=ok wall=999.5s
+[2026-05-13 16:06:00] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=100 K=20
+[2026-05-13 16:37:38] [bench] cnm_pt_cpu_multi_core_multistep_mc_py_torch N=100 K=20 status=ok wall=1898.8s
+[2026-05-13 16:37:38] [benchmark] g1c_cc_gpu_single_thread_conventional_mc_cuda_c
+[2026-05-13 16:37:38] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=25 K=20
+[2026-05-13 16:37:48] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=25 K=20 status=ok wall=9.9s
+[2026-05-13 16:37:48] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=50 K=20
+[2026-05-13 16:37:57] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=50 K=20 status=ok wall=8.2s
+[2026-05-13 16:37:57] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=100 K=20
+[2026-05-13 16:38:07] [bench] g1c_cc_gpu_single_thread_conventional_mc_cuda_c N=100 K=20 status=ok wall=10.8s
+[2026-05-13 16:38:07] [benchmark] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list
+[2026-05-13 16:38:07] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=25 K=20
+[2026-05-13 16:38:20] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=25 K=20 status=ok wall=12.4s
+[2026-05-13 16:38:20] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=50 K=20
+[2026-05-13 16:38:36] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=50 K=20 status=ok wall=15.8s
+[2026-05-13 16:38:36] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=100 K=20
+[2026-05-13 16:39:00] [bench] g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list N=100 K=20 status=ok wall=24.2s
+[2026-05-13 16:39:00] [benchmark] g1c_pt_gpu_single_thread_conventional_mc_py_torch
+[2026-05-13 16:39:00] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=25 K=20
+[2026-05-13 16:43:48] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=25 K=20 status=ok wall=288.5s
+[2026-05-13 16:43:48] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=50 K=20
+[2026-05-13 16:51:54] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=50 K=20 status=ok wall=485.5s
+[2026-05-13 16:51:54] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=100 K=20
+[2026-05-13 17:05:48] [bench] g1c_pt_gpu_single_thread_conventional_mc_py_torch N=100 K=20 status=ok wall=833.9s
+[2026-05-13 17:05:48] [benchmark] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-13 17:05:48] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=25 K=20
+[2026-05-13 17:06:36] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=25 K=20 status=ok wall=48.3s
+[2026-05-13 17:06:36] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=50 K=20
+[2026-05-13 17:07:22] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=50 K=20 status=ok wall=45.6s
+[2026-05-13 17:07:22] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=100 K=20
+[2026-05-13 17:08:24] [bench] g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused N=100 K=20 status=ok wall=62.4s
+[2026-05-13 17:08:24] [benchmark] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 17:08:24] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=20
+[2026-05-13 17:08:58] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=20 status=ok wall=33.7s
+[2026-05-13 17:08:58] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=20
+[2026-05-13 17:10:04] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=20 status=ok wall=66.5s
+[2026-05-13 17:10:04] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=20
+[2026-05-13 17:11:42] [bench] g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=20 status=ok wall=98.0s
+[2026-05-13 17:11:42] [benchmark] g1m_cc_gpu_single_thread_multistep_mc_cuda_c
+[2026-05-13 17:11:42] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=25 K=20
+[2026-05-13 17:11:50] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=25 K=20 status=ok wall=7.3s
+[2026-05-13 17:11:50] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=50 K=20
+[2026-05-13 17:11:57] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=50 K=20 status=ok wall=7.8s
+[2026-05-13 17:11:57] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=100 K=20
+[2026-05-13 17:12:07] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=100 K=20 status=ok wall=9.7s
+[2026-05-13 17:12:07] [benchmark] g1m_pt_gpu_single_thread_multistep_mc_py_torch
+[2026-05-13 17:12:07] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=25 K=20
+[2026-05-13 17:43:55] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=25 K=20 status=ok wall=1908.1s
+[2026-05-13 17:43:55] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=50 K=20
+[2026-05-13 18:39:31] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=50 K=20 status=ok wall=3336.0s
+[2026-05-13 18:39:31] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=100 K=20
+[2026-05-13 20:19:31] [bench] g1m_pt_gpu_single_thread_multistep_mc_py_torch N=100 K=20 status=timeout wall=6000.2s
+[2026-05-13 20:19:31] [benchmark] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-13 20:19:31] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=25 K=20
+[2026-05-13 20:20:24] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=25 K=20 status=ok wall=52.1s
+[2026-05-13 20:20:24] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=50 K=20
+[2026-05-13 20:21:04] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=50 K=20 status=ok wall=40.5s
+[2026-05-13 20:21:04] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=100 K=20
+[2026-05-13 20:22:09] [bench] g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused N=100 K=20 status=ok wall=64.9s
+[2026-05-13 20:22:09] [benchmark] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 20:22:09] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=20
+[2026-05-13 20:22:48] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=20 status=ok wall=39.2s
+[2026-05-13 20:22:48] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=20
+[2026-05-13 20:23:42] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=20 status=ok wall=54.0s
+[2026-05-13 20:23:42] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=20
+[2026-05-13 20:25:12] [bench] g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=20 status=ok wall=89.8s
+[2026-05-13 20:25:12] [benchmark] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c
+[2026-05-13 20:25:12] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=25 K=20
+[2026-05-13 20:25:21] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=25 K=20 status=ok wall=9.0s
+[2026-05-13 20:25:21] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=50 K=20
+[2026-05-13 20:25:29] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=50 K=20 status=ok wall=8.2s
+[2026-05-13 20:25:29] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=100 K=20
+[2026-05-13 20:25:39] [bench] gnc_cc_gpu_multi_thread_conventional_mc_cuda_c N=100 K=20 status=ok wall=10.2s
+[2026-05-13 20:25:39] [benchmark] gnc_pt_gpu_multi_thread_conventional_mc_py_torch
+[2026-05-13 20:25:39] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=25 K=20
+[2026-05-13 20:30:32] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=25 K=20 status=ok wall=292.2s
+[2026-05-13 20:30:32] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=50 K=20
+[2026-05-13 20:38:45] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=50 K=20 status=ok wall=493.2s
+[2026-05-13 20:38:45] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=100 K=20
+[2026-05-13 20:53:23] [bench] gnc_pt_gpu_multi_thread_conventional_mc_py_torch N=100 K=20 status=ok wall=878.0s
+[2026-05-13 20:53:23] [benchmark] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused
+[2026-05-13 20:53:23] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=25 K=20
+[2026-05-13 20:54:10] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=25 K=20 status=ok wall=47.3s
+[2026-05-13 20:54:10] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=50 K=20
+[2026-05-13 20:55:33] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=50 K=20 status=ok wall=82.4s
+[2026-05-13 20:55:33] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=100 K=20
+[2026-05-13 20:57:51] [bench] gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused N=100 K=20 status=ok wall=138.5s
+[2026-05-13 20:57:51] [benchmark] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list
+[2026-05-13 20:57:51] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=20
+[2026-05-13 20:58:59] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=25 K=20 status=ok wall=67.8s
+[2026-05-13 20:58:59] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=20
+[2026-05-13 21:01:08] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=50 K=20 status=ok wall=129.7s
+[2026-05-13 21:01:08] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=20
+[2026-05-13 21:04:43] [bench] gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list N=100 K=20 status=ok wall=214.1s
+[2026-05-13 21:04:43] [benchmark] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c
+[2026-05-13 21:04:43] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=25 K=20
+[2026-05-13 21:04:50] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=25 K=20 status=ok wall=7.4s
+[2026-05-13 21:04:50] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=50 K=20
+[2026-05-13 21:04:58] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=50 K=20 status=ok wall=7.8s
+[2026-05-13 21:04:58] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=100 K=20
+[2026-05-13 21:05:08] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=100 K=20 status=ok wall=10.1s
+[2026-05-13 21:05:08] [benchmark] gnm_pt_gpu_multi_thread_multistep_mc_py_torch
+[2026-05-13 21:05:08] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=25 K=20
+[2026-05-13 21:38:34] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=25 K=20 status=ok wall=2006.4s
+[2026-05-13 21:38:34] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=50 K=20
+[2026-05-13 22:37:43] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=50 K=20 status=ok wall=3549.1s
+[2026-05-13 22:37:43] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=100 K=20
+[2026-05-14 00:17:44] [bench] gnm_pt_gpu_multi_thread_multistep_mc_py_torch N=100 K=20 status=timeout wall=6000.2s
+[2026-05-14 00:17:44] [benchmark] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused
+[2026-05-14 00:17:44] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=25 K=20
+[2026-05-14 00:18:36] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=25 K=20 status=ok wall=52.2s
+[2026-05-14 00:18:36] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=50 K=20
+[2026-05-14 00:19:56] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=50 K=20 status=ok wall=80.0s
+[2026-05-14 00:19:56] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=100 K=20
+[2026-05-14 00:22:13] [bench] gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused N=100 K=20 status=ok wall=136.7s
+[2026-05-14 00:22:13] [benchmark] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list
+[2026-05-14 00:22:13] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=20
+[2026-05-14 00:23:27] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=25 K=20 status=ok wall=74.8s
+[2026-05-14 00:23:27] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=20
+[2026-05-14 00:25:27] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=50 K=20 status=ok wall=119.4s
+[2026-05-14 00:25:27] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=20
+[2026-05-14 00:28:56] [bench] gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list N=100 K=20 status=ok wall=209.3s
+[2026-05-14 00:28:56] === PHASE 2 BENCHMARK DONE === records=27
+[2026-05-14 00:28:56] === PHASE 3 PLOTS & TABLES ===
+[2026-05-14 00:28:56] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (82 rows)
+[2026-05-14 00:28:59] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-14 00:29:00] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-14 00:29:00] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-14 00:29:01] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-14 00:29:01] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-14 00:29:01] === RUNNER DONE === wall=45942.3s
+[2026-05-14 00:30:20] === RUNNER START === phase=outputs apps=27 eq=100 prod=100 K=20 seed=42
+[2026-05-14 00:30:20] === PHASE 3 PLOTS & TABLES ===
+[2026-05-14 00:30:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (82 rows)
+[2026-05-14 00:30:22] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-14 00:30:23] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-14 00:30:24] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-14 00:30:25] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-14 00:30:25] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-14 00:30:25] === RUNNER DONE === wall=4.3s
+[2026-05-14 00:31:13] === RUNNER START === phase=outputs apps=27 eq=100 prod=100 K=20 seed=42
+[2026-05-14 00:31:13] === PHASE 3 PLOTS & TABLES ===
+[2026-05-14 00:31:13] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (82 rows)
+[2026-05-14 00:31:15] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-14 00:31:16] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-14 00:31:17] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-14 00:31:18] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-14 00:31:18] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-14 00:31:18] === RUNNER DONE === wall=4.8s
+[2026-05-14 00:43:15] === RUNNER START === phase=outputs apps=25 eq=100 prod=100 K=20 seed=42
+[2026-05-14 00:43:15] === PHASE 3 PLOTS & TABLES ===
+[2026-05-14 00:43:15] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (76 rows)
+[2026-05-14 00:43:17] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-14 00:43:18] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-14 00:43:19] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-14 00:43:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-14 00:43:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-14 00:43:20] === RUNNER DONE === wall=4.5s
+[2026-05-14 00:45:54] === RUNNER START === phase=outputs apps=25 eq=100 prod=100 K=20 seed=42
+[2026-05-14 00:45:54] === PHASE 3 PLOTS & TABLES ===
+[2026-05-14 00:45:54] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (76 rows)
+[2026-05-14 00:45:56] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-14 00:45:57] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-14 00:45:58] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-14 00:45:59] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-14 00:45:59] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-14 00:45:59] === RUNNER DONE === wall=4.9s
+[2026-05-14 01:25:20] === RUNNER START === phase=outputs apps=25 eq=100 prod=100 K=20 seed=42
+[2026-05-14 01:25:20] === PHASE 3 PLOTS & TABLES ===
+[2026-05-14 01:25:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (76 rows)
+[2026-05-14 01:25:22] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-14 01:25:23] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-14 01:25:24] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-14 01:25:24] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-14 01:25:25] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md
+[2026-05-14 01:25:25] === RUNNER DONE === wall=4.7s
+[2026-05-14 09:38:29] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=25 K=20
+[2026-05-14 09:38:52] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=25 K=20 status=ok wall=22.4s
+[2026-05-14 09:38:52] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=50 K=20
+[2026-05-14 09:39:33] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=50 K=20 status=ok wall=41.1s
+[2026-05-14 09:39:33] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=100 K=20
+[2026-05-14 09:40:29] [bench] g1m_cc_gpu_single_thread_multistep_mc_cuda_c N=100 K=20 status=ok wall=56.1s
+[2026-05-14 09:40:29] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=25 K=20
+[2026-05-14 09:41:01] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=25 K=20 status=ok wall=32.0s
+[2026-05-14 09:41:01] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=50 K=20
+[2026-05-14 09:41:56] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=50 K=20 status=ok wall=54.9s
+[2026-05-14 09:41:56] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=100 K=20
+[2026-05-14 09:43:20] [bench] gnm_cc_gpu_multi_thread_multistep_mc_cuda_c N=100 K=20 status=ok wall=84.4s
+[2026-05-14 09:43:20] === PHASE 3 PLOTS & TABLES ===
+[2026-05-14 09:43:20] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\results.tsv (76 rows)
+[2026-05-14 09:43:23] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_throughput.png
+[2026-05-14 09:43:24] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_wallclock.png
+[2026-05-14 09:43:25] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_scaling.png
+[2026-05-14 09:43:25] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\plot_speedup.png
+[2026-05-14 09:43:25] [outputs] wrote D:\git\rouse_model_python_independent_apps\benchmark_data\tables.md

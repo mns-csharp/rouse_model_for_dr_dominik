@@ -1,0 +1,11 @@
+[project]
+name = "g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pyooptool]
+dl-framework = "pytorch"
+dl-variant = "app"
+interface-style = "protocol"
+kind = "deep-learning"

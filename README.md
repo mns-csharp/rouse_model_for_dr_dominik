@@ -1,137 +1,84 @@
-# Rouse MC simulator: benchmark + T1-T7 validation
+# App codes
 
-PyTorch Rouse-model simulator with two entry-point apps:
+25 apps under `src/`. (Two PyTorch-multistep apps `g1m_pt` and `gnm_pt`
+were removed on 2026-05-14 after they consistently timed out at
+N=100, K=20.)
 
-- **Benchmark** (`src/apps/benchmark/`): the 12-cell performance
-  matrix that compares conventional single-trial Metropolis MC against
-  the Migacz rank-1 multistep MC on both CPU and GPU.
-- **Validation** (`src/apps/validation/`): the T1-T7 Rouse-property
-  validator. For each (N, phi) cell it fits the static and dynamic
-  Rouse scalings (end-to-end distance, radius of gyration, COM
-  diffusion, g1 short-time, Rouse time tau_R, diffusion D) and emits
-  PASS/FAIL verdicts per the T1..T7 thresholds.
-
-## Important: the top-level directory must be named `rouse_model_python`
-
-Every Python import in this tree starts with `rouse_model_python`
-(for example `from rouse_model_python.src.apps.benchmark.orchestrator
-import BenchmarkOrchestrator`). For those imports to resolve, the
-directory containing this code must be named `rouse_model_python`.
-If it currently has a different name, rename it:
-
-```bash
-mv <current-folder-name> rouse_model_python
-```
-
-Then run all commands from the parent directory so Python locates
-the package.
-
-## Hardware prerequisites
-
-- NVIDIA GPU with CUDA 12.x for the benchmark matrix (RTX 4070 or
-  better recommended). The benchmark has CPU-only cells too, but the
-  headline Migacz speedup only shows up on GPU.
-- The validation app runs on CPU or GPU.
-
-## Install
-
-```bash
-pip install -r requirements.txt
-```
-
-On Windows, also install the matching Triton build to keep
-`torch.compile` out of eager-mode fallback:
-
-```bash
-pip install triton-windows==3.2.0
-```
-
-Triton must match the torch version: torch 2.6 pairs with triton
-3.2. Without it, the GPU multistep kernels lose about a factor of
-four.
-
-## Sanity checks after install
-
-```bash
-cd <parent-of-rouse_model_python>
-python -m rouse_model_python.src.apps.benchmark.orchestrator --help
-python -m rouse_model_python.src.apps.validation.main --help
-```
-
-If either import fails, check that the package directory is named
-exactly `rouse_model_python`.
-
-## Running the benchmark
-
-The full protocol (PE1/PE2/PE3 pre-experiments, 12-cell main matrix,
-acceptance checks, plots) is specified in `context_rouse_benchmark.txt`
-and driven by `src/apps/benchmark/orchestrator.py`. A typical
-invocation from the parent directory:
-
-```bash
-python -m rouse_model_python.src.apps.benchmark.orchestrator \
-    --output_dir bench_output --phi 0.035 --n_chains 50 \
-    --warmup_sweeps 5 --repeats 3 --seed 42 --b_timing_mode \
-    --only r7,b1,b2,pe1,pe2,pe3,b_matrix,analyze
-```
-
-A fast end-to-end run with the reduced sweep schedule takes about
-1.5 h on an RTX 4070 for the single-replica matrix, about 4 h for
-the R=3 companion run. The four shell scripts at the project root
-(`run_bench_matrix.sh`, `run_bench_matrix_short.sh`,
-`run_migacz_torch_bench.sh`, `run_migacz_torch_bench_large.sh`) are
-convenience wrappers around the Python orchestrator; the
-orchestrator itself is the authoritative runner.
-
-## Running the validation
-
-The Rouse-property acceptance checks are specified in
-`context_rouse_verification.txt` and driven by
-`src/apps/validation/main.py`. Minimal invocation:
-
-```bash
-python -m rouse_model_python.src.apps.validation.main \
-    --device cpu --is_parallel false --force \
-    --output_dir validation_output
-```
-
-The app walks the N x phi matrix from `src/configs/simulation.toml`,
-runs the simulation for each cell, fits the seven Rouse scalings,
-and writes per-cell TSVs plus `00_t1_t7_verdicts.json` under the
-chosen `--output_dir`.
-
-## Directory map
+Each app under `src/` has a mnemonic code prefix encoding its nature:
 
 ```
-rouse_model_python/                     (required folder name)
-  __init__.py
-  README.md                              (this file)
-  requirements.txt
-  context_rouse_benchmark.txt            (benchmark protocol spec)
-  context_rouse_verification.txt         (T1-T7 validation protocol spec)
-  run_bench_matrix.sh                    (optional benchmark wrapper)
-  run_bench_matrix_short.sh
-  run_migacz_torch_bench.sh
-  run_migacz_torch_bench_large.sh
-  src/
-    __init__.py
-    apps/
-      __init__.py
-      benchmark/                         (orchestrator, BenchmarkApp, main)
-      validation/                        (T1T7ValidatorApp, main)
-    configs/                             (benchmark.toml, physics.toml,
-                                          simulation.toml, execution.toml)
-    libs/                                (algorithms, analysis, chain,
-                                          config, energy, execution, io,
-                                          mc_moves, number_space,
-                                          observables, paths, simulation)
+Code: <hw><thread><algo>_<backend>
+  hw      : c = CPU,  g = GPU
+  thread  : 1 = single (single_core / single_thread),  n = multi (multi_core / multi_thread)
+  algo    : c = conventional Metropolis MC,  m = Migacz multistep MC
+  backend : nb    = numba
+            pt    = py_torch
+            cc    = cuda_c
+            ptc   = py_torch_compiled            (CPU exploratory variant)
+            ptf   = py_torch_fused               (CPU exploratory variant)
+            ptg   = py_torch_gpu_fused           (GPU-resident, fully batched, torch.compile-wrapped)
+            ptgcl = py_torch_gpu_fused_cell_list (ptg + spatial cell-list neighbour lookup; large-K)
+            cccl  = cuda_c_cell_list             (hand-written CUDA-C kernel with 27-cell scan)
 ```
 
-## Citation
+The full directory name is `<code>_<descriptive_name>` so both ways of reading it work. Import paths use the new directory name verbatim, e.g.:
 
-The Migacz multistep algorithm is described in:
+```
+python -m g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused.main --N 100 ...
+```
 
-Migacz, S.; Dutka, K.; Gumienny, P.; Marchwiany, M.; Gront, D.;
-Rudnicki, W. R. "Parallel Implementation of a Sequential Markov
-Chain in Monte Carlo Simulations of Physical Systems with Pairwise
-Interactions." *J. Chem. Theory Comput.* 2019, **15**, 2797-2806.
+## Code → app → purpose
+
+| Code      | Directory                                                                   | Purpose |
+|-----------|-----------------------------------------------------------------------------|---------|
+| `c1c_nb`  | c1c_nb_cpu_single_core_conventional_mc_numba                                | CPU Numba baseline (single-threaded). The reference implementation; fastest CPU choice for small/mid sizes. |
+| `c1c_pt`  | c1c_pt_cpu_single_core_conventional_mc_py_torch                             | CPU PyTorch port of the baseline; loses to Numba on CPU. |
+| `c1c_ptc` | c1c_ptc_cpu_single_core_conventional_mc_py_torch_compiled                   | Exploratory: same per-segment loop, wrapped with `torch.compile`. Result was a wash with `c1c_pt`. |
+| `c1c_ptf` | c1c_ptf_cpu_single_core_conventional_mc_py_torch_fused                      | Exploratory: round-based fused dispatch on CPU. ~1.6× faster than `c1c_pt` but still loses to `c1c_nb`. |
+| `c1m_nb`  | c1m_nb_cpu_single_core_multistep_mc_numba                                   | CPU Numba multistep (rank-1 EMM correction). |
+| `c1m_pt`  | c1m_pt_cpu_single_core_multistep_mc_py_torch                                | CPU PyTorch multistep port. |
+| `cnc_nb`  | cnc_nb_cpu_multi_core_conventional_mc_numba                                 | CPU Numba parallel (prange). |
+| `cnc_pt`  | cnc_pt_cpu_multi_core_conventional_mc_py_torch                              | CPU PyTorch parallel (OpenMP via torch). |
+| `cnm_nb`  | cnm_nb_cpu_multi_core_multistep_mc_numba                                    | CPU Numba parallel multistep (prange + rank-1 EMM correction). |
+| `cnm_pt`  | cnm_pt_cpu_multi_core_multistep_mc_py_torch                                 | CPU PyTorch parallel multistep. |
+| `g1c_cc`  | g1c_cc_gpu_single_thread_conventional_mc_cuda_c                             | Hand-written CUDA-C, single-stream conventional. Cupy RawKernel via NVRTC. Single fully-fused mega-kernel per sweep. |
+| `g1c_pt`  | g1c_pt_gpu_single_thread_conventional_mc_py_torch                           | Original GPU PyTorch (per-segment Python loop antipattern; the "PyTorch is 60× slower" baseline). |
+| `g1c_ptg` | g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused                | **Redesigned PyTorch on GPU.** Round-based fused dispatch, `torch.compile`. Portable alternative to the hand-written CUDA-C kernel. |
+| `g1m_cc`  | g1m_cc_gpu_single_thread_multistep_mc_cuda_c                                | Hand-written CUDA-C Migacz multistep: round-permutation batching, CUDA-C propose kernel, batched ΔE, rank-1 EMM correction matrix, host-side causal accept loop. |
+| `g1m_ptg` | g1m_ptg_gpu_single_thread_multistep_mc_py_torch_gpu_fused                   | **Redesigned PyTorch multistep on GPU**, fully vectorised correction matrix. |
+| `gnc_cc`  | gnc_cc_gpu_multi_thread_conventional_mc_cuda_c                              | CUDA-C with multiple CUDA streams. |
+| `gnc_pt`  | gnc_pt_gpu_multi_thread_conventional_mc_py_torch                            | Original GPU PyTorch with streams. |
+| `gnc_ptg` | gnc_ptg_gpu_multi_thread_conventional_mc_py_torch_gpu_fused                 | **Redesigned PyTorch + CUDA streams** on top of fused dispatch. |
+| `gnm_cc`  | gnm_cc_gpu_multi_thread_multistep_mc_cuda_c                                 | Hand-written CUDA-C Migacz multistep with multi-stream propose+ΔE dispatch; rank-1 correction computed on the default stream after stream rejoin. |
+| `gnm_ptg` | gnm_ptg_gpu_multi_thread_multistep_mc_py_torch_gpu_fused                    | **Redesigned PyTorch streams + multistep**. |
+| `g1c_ptgcl` | g1c_ptgcl_gpu_single_thread_conventional_mc_py_torch_gpu_fused_cell_list | **Redesigned PyTorch + cell-list neighbour lookup.** 27-cell spatial neighbour scan on top of fused dispatch; designed for large chain counts where all-pairs cost dominates. |
+| `g1m_ptgcl` | g1m_ptgcl_gpu_single_thread_multistep_mc_py_torch_gpu_fused_cell_list | Multistep MC variant of `g1c_ptgcl`. |
+| `gnc_ptgcl` | gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list | Stream variant of `g1c_ptgcl`. |
+| `gnm_ptgcl` | gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list | Streams + multistep + cell-list. |
+| `g1c_cccl` | g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list | **Hand-written CUDA-C cell-list.** 27-cell scan in a hand-written kernel; the cell-list counterpart to `g1c_cc`, designed for large chain counts. |
+
+## Benchmark
+
+The authoritative current benchmark is the run delivered in
+`D:\git\rouse_python_benchmark_hinge_opt_2026-05-14_003001\` — 25 apps ×
+N ∈ {25, 50, 100} × K = 20, eq = prod = 100, seed = 42, phi = 0.01. See its
+`README.md`, `benchmark.md`, `results.tsv`, and `tables.md` for the full
+results.
+
+Headline ranking — throughput at N = 100, K = 20 (top 7 of 25; baseline
+`c1c_nb` is rank 13):
+
+| Rank | Code       | Throughput (sw/s) | Speedup × vs `c1c_nb` |
+|------|------------|-------------------|------------------------|
+| 1    | `gnc_cc`   | 75.67             | 49.87                  |
+| 2    | `g1c_cc`   | 71.96             | 47.42                  |
+| 3    | `g1c_cccl` | 11.88             |  7.83                  |
+| 4    | `g1m_cc`   |  6.86             |  4.52                  |
+| 5    | `g1c_ptg`  |  5.62             |  3.70                  |
+| 6    | `g1m_ptg`  |  4.19             |  2.76                  |
+| 7    | `gnm_cc`   |  3.46             |  2.28                  |
+| 13   | `c1c_nb`   |  1.52             |  1.00 (baseline)       |
+
+The two conventional CUDA-C apps lead. The multistep apps trail conventional
+at K = 20 — consistent with the Migacz paper, which identifies small batch
+sizes as the inefficient regime; see the deliverable's README §7.1 / §7.5.

@@ -1,0 +1,106 @@
+================================================================================
+   PROPERTIES VALIDATED BY KURIATA, GRONT & SIKORSKI, CMST 22(4) 179-185 (2016)
+================================================================================
+
+The authors used two off-lattice coarse-grained models (bead-spring Rouse model
+and fixed-bond-length backrub model) with athermal excluded volume to validate
+the following Rouse-model properties via Monte Carlo simulation.
+
+
+================================================================================
+1  STATIC PROPERTIES VALIDATED
+================================================================================
+
+1.1  Mean-Squared End-to-End Distance Scaling
+─────────────────────────────────────────────
+Both models reproduce the expected power-law growth of chain size with chain
+length, confirming self-avoiding walk universality.
+
+  ⟨R²⟩ ~ N^(2ν)
+
+  Measured exponent:  2ν = 1.20  (both models)
+  Theory (3D SAW):   2ν ≈ 1.18
+
+
+1.2  Mean-Squared Radius of Gyration Scaling
+────────────────────────────────────────────
+The radius of gyration scales with the same exponent as the end-to-end
+distance, providing an independent confirmation of correct static scaling.
+
+  ⟨R_g²⟩ ~ N^(2ν)
+
+  Measured exponent:  2ν = 1.20  (both models)
+  Theory (3D SAW):   2ν ≈ 1.18
+
+
+================================================================================
+2  DYNAMIC PROPERTIES VALIDATED
+================================================================================
+
+2.1  Center-of-Mass Mean Square Displacement
+────────────────────────────────────────────
+The center of mass exhibits normal Fickian diffusion (linear in time) for
+both algorithms, confirming that the pseudo-time scale is properly defined.
+
+  g_CM(t) = ⟨(r_CM(t) − r_CM(0))²⟩ ~ t^1
+
+  Measured exponent:  1.00  (backrub);  0.95  (Rouse bead-spring)
+  Theory:             1.00
+
+
+2.2  Middle-Segment Mean Square Displacement
+────────────────────────────────────────────
+The middle monomer shows two distinct time regimes: sub-diffusive at short
+times due to chain connectivity, crossing over to free diffusion after the
+longest relaxation time.
+
+  g₁(t) = ⟨(r_{N/2}(t) − r_{N/2}(0))²⟩
+
+  g₁(t) ~ t^(1/2)   for t < τ_R
+  g₁(t) ~ t^1        for t ≥ τ_R
+
+  Measured short-time exponent:  0.57  (backrub);  0.60  (Rouse bead-spring)
+  Theory:                        0.50
+  Note: Slightly higher than 0.5 due to excluded volume effects.
+
+
+2.3  Diffusion Coefficient Scaling
+──────────────────────────────────
+The diffusion coefficient decreases inversely with chain length, as predicted
+by the Rouse model where total friction is proportional to N.
+
+  D = ⟨(r(t) − r(0))²⟩ / (6t)
+
+  D ~ N^(−1)
+
+  Measured exponent:  −1.00  (backrub);  −1.01  (Rouse bead-spring)
+  Theory:             −1.00
+
+
+2.4  Longest Relaxation Time Scaling
+────────────────────────────────────
+The end-to-end vector autocorrelation decay time scales as a power law with
+chain length, with the exponent close to the Rouse prediction for excluded-
+volume chains.
+
+  g_R(t) = ⟨R(0) · R(t)⟩ / ⟨R²⟩  ~  exp(−t / τ_R)
+
+  τ_R ~ N^(1+2ν)
+
+  Measured exponent:  2.13  (backrub);  2.30  (Rouse bead-spring)
+  Theory (SAW):      ≈2.18
+
+
+================================================================================
+3  SUMMARY TABLE — MEASURED vs THEORETICAL EXPONENTS
+================================================================================
+
+  Property              Theory     Backrub Model   Rouse Bead-Spring
+  ──────────────────────────────────────────────────────────────────
+  ⟨R²⟩, ⟨R_g²⟩  (2ν)   ≈1.18        1.20              1.20
+  g_CM(t)  exponent      1.00        1.00              0.95
+  g₁(t) short-time       0.50        0.57              0.60
+  D  exponent            −1.00       −1.00             −1.01
+  τ_R  exponent          ≈2.18        2.13              2.30
+
+================================================================================

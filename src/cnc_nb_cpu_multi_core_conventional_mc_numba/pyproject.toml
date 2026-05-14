@@ -1,0 +1,9 @@
+[project]
+name = "cnc_nb_cpu_multi_core_conventional_mc_numba"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pyooptool]
+interface-style = "protocol"
+kind = "app"

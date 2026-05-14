@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{7821FDD3-B4A9-5D3A-B92C-239558ADE4C8}</ProjectGuid>
+    <ProjectHome>.</ProjectHome>
+    <StartupFile>__init__.py</StartupFile>
+    <SearchPath />
+    <WorkingDirectory>.</WorkingDirectory>
+    <OutputPath>.</OutputPath>
+    <Name>cpu_multi_core_multistep_mc_numba</Name>
+    <RootNamespace>cpu_multi_core_multistep_mc_numba</RootNamespace>
+    <InterpreterId>MSBuild|env|$(MSBuildProjectFullPath)</InterpreterId>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="__init__.py" />
+    <Compile Include="_checklist.py" />
+    <Compile Include="chain.py" />
+    <Compile Include="config.py" />
+    <Compile Include="energy.py" />
+    <Compile Include="io_utils.py" />
+    <Compile Include="logging_setup.py" />
+    <Compile Include="main.py" />
+    <Compile Include="mc.py" />
+    <Compile Include="number_space.py" />
+    <Compile Include="observables.py" />
+    <Compile Include="proposer.py" />
+    <Compile Include="simulation.py" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
+</Project>

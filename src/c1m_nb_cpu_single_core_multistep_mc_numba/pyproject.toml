@@ -1,0 +1,9 @@
+[project]
+name = "c1m_nb_cpu_single_core_multistep_mc_numba"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pyooptool]
+interface-style = "protocol"
+kind = "app"

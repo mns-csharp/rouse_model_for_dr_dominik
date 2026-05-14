@@ -1,0 +1,14 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\src",
+    "\\src\\cpu_multi_core_conventional_mc_numba",
+    "\\src\\cpu_multi_core_conventional_mc_py_torch",
+    "\\src\\cpu_multi_core_multistep_mc_numba",
+    "\\src\\cpu_multi_core_multistep_mc_py_torch",
+    "\\src\\cpu_single_core_conventional_mc_numba",
+    "\\_ck_smoke_gpu_multi_thread_conventional_mc_cuda_c"
+  ],
+  "SelectedNode": "\\src\\cpu_single_core_conventional_mc_numba",
+  "PreviewInSolutionExplorer": false
+}

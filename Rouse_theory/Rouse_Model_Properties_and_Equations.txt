@@ -1,0 +1,236 @@
+================================================================================
+        ROUSE MODEL: PROPERTIES AND MATHEMATICAL EQUATIONS
+================================================================================
+
+Sources:
+  Rouse, P.E. Jr., J. Chem. Phys. 21(7), 1272-1280 (1953)
+  Kuriata, A., Gront, D. & Sikorski, A., CMST 22(4), 179-185 (2016)
+
+
+================================================================================
+1  STATIC PROPERTIES
+================================================================================
+
+1.1  Gaussian Submolecule Probability
+──────────────────────────────────────
+The probability that the far end of a submolecule is found at position (x,y,z)
+relative to its near end, assuming the submolecule is long enough for Gaussian
+statistics to apply.
+
+  ψ(x,y,z) dx dy dz = (β/π)^(3/2) exp[−β(x² + y² + z²)] dx dy dz
+
+  β = 3 / (2σ²),  where σ² = mean-square submolecule end-to-end separation
+
+
+1.2  Mean-Squared End-to-End Distance
+──────────────────────────────────────
+The average squared distance between the first and last beads of the chain,
+measuring overall chain extension.
+
+  ⟨R²⟩ = ⟨(r_N − r_1)²⟩
+
+  Scaling:  ⟨R²⟩ ~ N^(2ν),   ν ≈ 0.588 (3D SAW with excluded volume)
+  Ideal Rouse (no excluded volume):  ⟨R²⟩ = Nσ²,  i.e. ν = 0.5
+
+
+1.3  Mean-Squared Radius of Gyration
+─────────────────────────────────────
+The average squared distance of all beads from the chain's center of mass,
+a less noisy measure of chain size than R².
+
+  ⟨R_g²⟩ = ⟨ Σ_{i=1}^{N} (r_i − r_CM)² ⟩
+
+  Scaling:  ⟨R_g²⟩ ~ N^(2ν),  same exponent as ⟨R²⟩
+
+
+1.4  Universal Ratio R² / R_g²
+───────────────────────────────
+A shape diagnostic ratio that is constant for a given universality class;
+deviations signal sampling or equilibration problems.
+
+  ⟨R²⟩ / ⟨R_g²⟩ ≈ 6.25   (3D self-avoiding walk)
+  Ideal chain (Gaussian):  ⟨R²⟩ / ⟨R_g²⟩ = 6
+
+
+1.5  Configuration Probability (Full Chain)
+───────────────────────────────────────────
+The joint probability density for the entire chain configuration in
+3N-dimensional space, assuming independent Gaussian submolecules.
+
+  Ψ = (β/π)^(3N/2) exp[−β Σ_{j=1}^{N} (x_j² + y_j² + z_j²)]
+
+
+================================================================================
+2  DYNAMIC PROPERTIES
+================================================================================
+
+2.1  Rouse Matrix Eigenvalues
+─────────────────────────────
+Eigenvalues of the tridiagonal connectivity matrix A that couples
+nearest-neighbor submolecules along the chain.
+
+  λ_p = 4 sin²[ pπ / (2(N+1)) ],    p = 1, 2, …, N
+
+
+2.2  Relaxation Times (Exact)
+─────────────────────────────
+Each normal mode p has a characteristic relaxation time governing how quickly
+that mode of coordinated segmental motion decays.
+
+  τ_p = σ² / [ 24 B k T  sin²( pπ / (2(N+1)) ) ],    p = 1, 2, …, N
+
+  B = mobility of the end of a submolecule
+  k = Boltzmann constant;  T = temperature
+
+
+2.3  Relaxation Times (Long-Wavelength Approximation, p ≪ N)
+────────────────────────────────────────────────────────────
+For low mode numbers the sine can be approximated, yielding relaxation times
+independent of how the chain is subdivided.
+
+  τ_p ≈ σ² N² / (6π² p² B k T)
+
+  Equivalently using measurable quantities:
+  τ_p = 6(η₀ − η_s) / (π² p² n k T)
+
+  where η₀ = steady-flow solution viscosity, η_s = solvent viscosity,
+        n = number density of polymer molecules
+
+
+2.4  Longest Relaxation Time Scaling
+────────────────────────────────────
+The slowest mode (p = 1) sets the overall chain relaxation timescale; its
+scaling with N determines how simulation cost grows with chain length.
+
+  τ_R = τ_1 ~ N^(1+2ν)
+
+  Ideal Rouse (ν = 0.5):  τ_R ~ N²
+  With excluded volume (ν ≈ 0.588):  τ_R ~ N^2.18
+
+
+2.5  Steady-Flow Viscosity
+──────────────────────────
+The zero-frequency viscosity of the polymer solution, combining the solvent
+contribution with the summed contributions of all relaxation modes.
+
+  η₀ = η_s + nσ² N(N+2) / (36 B)
+
+
+2.6  Complex Viscosity Components
+─────────────────────────────────
+The real part η₁ gives the in-phase (dissipative) response and η₂ gives the
+out-of-phase (elastic) response under oscillatory shear.
+
+  η₁ = η_s + n k T  Σ_{p=1}^{N}  τ_p / (1 + ω² τ_p²)
+
+  η₂ = n k T  Σ_{p=1}^{N}  ω τ_p² / (1 + ω² τ_p²)
+
+  η* = η₁ − iη₂  (complex viscosity);  ω = angular frequency
+
+
+2.7  Complex Shear Modulus Components
+─────────────────────────────────────
+The storage modulus G₁ quantifies elastic energy stored per cycle and the
+loss modulus G₂ quantifies energy dissipated per cycle.
+
+  G* = G₁ + i G₂ = iω η*
+
+  G₁ = n k T  Σ_{p=1}^{N}  ω² τ_p² / (1 + ω² τ_p²)
+
+  G₂ = ω η_s + n k T  Σ_{p=1}^{N}  ω τ_p / (1 + ω² τ_p²)
+
+
+2.8  High-Frequency Approximations
+───────────────────────────────────
+Closed-form expressions valid when many modes contribute, obtained by
+replacing the discrete mode sum with an integral.
+
+  η₁ ≈ η_s + 3(η₀ − η_s) / [π (2ωτ₁)^(1/2)],    2 < ωτ₁ < N²/250
+
+  G₁ ≈ n k T [ (π/2)(ωτ₁/2)^(1/2) − 0.5 ],       5 < ωτ₁ < N²/250
+
+
+2.9  Diffusion Coefficient
+──────────────────────────
+The rate at which the chain's center of mass diffuses through the medium,
+inversely proportional to chain length because total friction scales
+linearly with N.
+
+  D = k_B T / (N ζ)
+
+  Equivalently:  D = ⟨(r(t) − r(0))²⟩ / (6t)
+
+  Scaling:  D ~ N^(−1)   (Rouse prediction)
+
+
+2.10  Center-of-Mass Mean Square Displacement
+─────────────────────────────────────────────
+The center of mass undergoes normal (Fickian) diffusion at all times,
+growing linearly with time.
+
+  g_CM(t) = ⟨(r_CM(t) − r_CM(0))²⟩ = 6 D t  ~  t^1
+
+
+2.11  Middle-Segment Mean Square Displacement
+─────────────────────────────────────────────
+A single interior monomer shows sub-diffusive motion at short times due to
+chain connectivity constraints, crossing over to free diffusion once the
+chain has fully relaxed.
+
+  g₁(t) = ⟨(r_{N/2}(t) − r_{N/2}(0))²⟩
+
+  g₁(t) ~ t^(1/2)     for t < τ_R   (sub-diffusive, internal modes)
+  g₁(t) ~ t^1         for t ≥ τ_R   (free diffusion)
+
+
+2.12  End-to-End Vector Autocorrelation
+───────────────────────────────────────
+Measures how quickly the chain loses memory of its initial end-to-end
+orientation; the decay time defines the longest relaxation time τ_R.
+
+  g_R(t) = ⟨R(0) · R(t)⟩ / ⟨R²⟩
+
+  g_R(t) ~ exp(−t / τ_R)
+
+  τ_R extracted at g_R(τ_R) = 1/e
+
+
+================================================================================
+3  MODEL POTENTIALS
+================================================================================
+
+3.1  Harmonic Bond (Bead-Spring / Rouse Model)
+──────────────────────────────────────────────
+Nearest-neighbor beads are connected by harmonic springs that penalize
+deviations from an equilibrium bond length.
+
+  U_ij^S = k (l_ij − l₀)²
+
+  l₀ = equilibrium bond length;  k = spring constant
+
+
+3.2  Excluded Volume (Athermal Hard-Core)
+─────────────────────────────────────────
+A purely repulsive step-function potential that prevents bead overlap,
+making the system athermal.
+
+  U_ij = E   for r_ij ≤ d_k
+  U_ij = 0   for r_ij > d_k
+
+  d_k = bead diameter;  E = repulsive energy barrier
+
+
+================================================================================
+4  SUMMARY OF KEY SCALING LAWS
+================================================================================
+
+  Property              Scaling Law      Rouse Exponent
+  ─────────────────────────────────────────────────────────────────
+  ⟨R²⟩, ⟨R_g²⟩         ~ N^(2ν)        2ν = 1.0 (ideal); ≈1.18 (SAW)
+  R² / R_g² ratio       ≈ const         6 (ideal); ≈6.25 (SAW)
+  τ_R (longest relax.)  ~ N^(1+2ν)      2.0 (ideal); ≈2.18 (SAW)
+  D (diffusion coeff.)  ~ N^(−1)        −1
+  g_CM(t)               ~ t^1           1
+  g₁(t), t < τ_R        ~ t^(1/2)       0.5
+
+================================================================================

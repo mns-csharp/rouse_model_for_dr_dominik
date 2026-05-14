@@ -1,0 +1,11 @@
+[project]
+name = "rouse_model_python_independent_apps"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pyooptool]
+interface-style = "protocol"
+
+[tool.uv.workspace]
+members = ["src/cnc_nb_cpu_multi_core_conventional_mc_numba", "src/cnc_pt_cpu_multi_core_conventional_mc_py_torch", "src/cnm_nb_cpu_multi_core_multistep_mc_numba", "src/cnm_pt_cpu_multi_core_multistep_mc_py_torch", "src/c1c_nb_cpu_single_core_conventional_mc_numba", "src/c1c_pt_cpu_single_core_conventional_mc_py_torch", "src/c1m_nb_cpu_single_core_multistep_mc_numba", "src/c1m_pt_cpu_single_core_multistep_mc_py_torch", "src/gnc_cc_gpu_multi_thread_conventional_mc_cuda_c", "src/gnc_pt_gpu_multi_thread_conventional_mc_py_torch", "src/gnm_cc_gpu_multi_thread_multistep_mc_cuda_c", "src/gnm_pt_gpu_multi_thread_multistep_mc_py_torch", "src/g1c_cc_gpu_single_thread_conventional_mc_cuda_c", "src/g1c_pt_gpu_single_thread_conventional_mc_py_torch", "src/g1m_cc_gpu_single_thread_multistep_mc_cuda_c", "src/g1m_pt_gpu_single_thread_multistep_mc_py_torch"]
