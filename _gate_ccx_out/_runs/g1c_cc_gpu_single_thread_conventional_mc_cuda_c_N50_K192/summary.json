@@ -1,0 +1,72 @@
+{
+  "acceptance": {
+    "c_tail": 0.5559895833333334,
+    "hinge": 0.25909375,
+    "n_tail": 0.45838541666666666
+  },
+  "config": {
+    "N": 50,
+    "algorithm": "segmented_conventional",
+    "backend": "cuda_c",
+    "box_size": 380.67136871305985,
+    "cuda_device": 0,
+    "device": "gpu",
+    "eq_sweeps": 100,
+    "init_method": "random_saw",
+    "kBT": 2.4943386,
+    "l0": 3.8,
+    "max_angle_hinge": 1.5707963267948966,
+    "n_chains": 192,
+    "phi": 0.01,
+    "prod_sweeps": 100,
+    "residues_per_segment": 8,
+    "seed": 42,
+    "sigma": 3.8,
+    "thread_mode": "single_thread"
+  },
+  "gpu": {
+    "device_name": "NVIDIA GeForce RTX 4070",
+    "free_mb_at_summary": 10947.0,
+    "peak_mb_eq": 69.71240234375,
+    "peak_mb_prod": 69.71240234375,
+    "total_mb": 12281.375
+  },
+  "observables": {
+    "N": 50,
+    "n_chains": 192,
+    "re2_mean": 1846.5787517828214,
+    "re2_std": 1239.6332164324067,
+    "rg2_mean": 280.2959510955661,
+    "rg2_std": 115.06078711235057
+  },
+  "timing": {
+    "eq_kernel_ms": {
+      "max_ms": 181.90232849121094,
+      "mean_ms": 165.3527360534668,
+      "p50_ms": 164.37503814697266,
+      "p99_ms": 169.00122482299813
+    },
+    "eq_sweep_ms": {
+      "max_ms": 183.53610002668574,
+      "mean_ms": 166.22717300022487,
+      "p50_ms": 165.26999999769032,
+      "p99_ms": 169.9725059830235
+    },
+    "eq_sweeps_per_s": 4.18471515131364,
+    "eq_wall_s": 23.896489100006875,
+    "prod_kernel_ms": {
+      "max_ms": 169.11871337890625,
+      "mean_ms": 164.84052963256835,
+      "p50_ms": 164.23731231689453,
+      "p99_ms": 168.76796249389648
+    },
+    "prod_sweep_ms": {
+      "max_ms": 170.0989000091795,
+      "mean_ms": 165.78072499949485,
+      "p50_ms": 165.25694998563267,
+      "p99_ms": 169.86120098561514
+    },
+    "prod_sweeps_per_s": 4.172941675550621,
+    "prod_wall_s": 23.963910299993586
+  }
+}

@@ -1,8 +1,10 @@
 # App codes
 
-25 apps under `src/`. (Two PyTorch-multistep apps `g1m_pt` and `gnm_pt`
+27 apps under `src/`. (Two PyTorch-multistep apps `g1m_pt` and `gnm_pt`
 were removed on 2026-05-14 after they consistently timed out at
-N=100, K=20.)
+N=100, K=20. Two optimized CUDA-C multistep apps `g1m_ccx` and `gnm_ccx`
+were added on 2026-05-14 — new versions of `g1m_cc` / `gnm_cc`, not edits
+to them; the original 25 apps are frozen.)
 
 Each app under `src/` has a mnemonic code prefix encoding its nature:
 
@@ -19,6 +21,8 @@ Code: <hw><thread><algo>_<backend>
             ptg   = py_torch_gpu_fused           (GPU-resident, fully batched, torch.compile-wrapped)
             ptgcl = py_torch_gpu_fused_cell_list (ptg + spatial cell-list neighbour lookup; large-K)
             cccl  = cuda_c_cell_list             (hand-written CUDA-C kernel with 27-cell scan)
+            ccx   = cuda_c_streamed              (optimized CUDA-C multistep: whole-grid streamed ΔE,
+                                                  sparse correction kernel, on-GPU causal accept)
 ```
 
 The full directory name is `<code>_<descriptive_name>` so both ways of reading it work. Import paths use the new directory name verbatim, e.g.:
@@ -56,6 +60,8 @@ python -m g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused.main --N 
 | `gnc_ptgcl` | gnc_ptgcl_gpu_multi_thread_conventional_mc_py_torch_gpu_fused_cell_list | Stream variant of `g1c_ptgcl`. |
 | `gnm_ptgcl` | gnm_ptgcl_gpu_multi_thread_multistep_mc_py_torch_gpu_fused_cell_list | Streams + multistep + cell-list. |
 | `g1c_cccl` | g1c_cccl_gpu_single_thread_conventional_mc_cuda_c_cell_list | **Hand-written CUDA-C cell-list.** 27-cell scan in a hand-written kernel; the cell-list counterpart to `g1c_cc`, designed for large chain counts. |
+| `g1m_ccx` | g1m_ccx_gpu_single_thread_multistep_mc_cuda_c_streamed | **Optimized CUDA-C multistep** (new version of `g1m_cc`). Whole-grid streamed ΔE kernel (`grid=(B,1,1)`), sparse correction kernel with an exact bounding-sphere prefilter (`grid=(B,B,1)`), on-GPU causal accept + scatter — zero per-batch GPU↔host round-trips. Beats `g1c_cc`/`gnc_cc` for K ≥ 128. |
+| `gnm_ccx` | gnm_ccx_gpu_multi_thread_multistep_mc_cuda_c_streamed | Multi-thread sibling of `g1m_ccx` (new version of `gnm_cc`). Same streamed CUDA-C kernels; the per-batch CUDA-stream split was dropped because the whole-grid kernels already saturate the GPU. `--streams` accepted for CLI parity but inert. |
 
 ## Benchmark
 

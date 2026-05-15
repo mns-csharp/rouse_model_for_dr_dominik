@@ -1,0 +1,769 @@
+"""Energy computation — torch CPU tensors.
+
+3-zone potential, all-pairs delta-E and dense BxB rank-1 EMM correction
+done with `torch.cdist` + bool masking. Fast for moderate N*K because
+oneDNN's GEMM is well-tuned even single-threaded.
+
+Sequence-separation skips: Calpha-Calpha < min_seq_caca, SG-SG < min_seq_sgsg,
+Calpha-SG < min_seq_casg.
+"""
+
+from __future__ import annotations
+
+import os
+
+import numpy as np
+import torch
+
+
+def _zone_e(r2: torch.Tensor, r_rep_sq: float, r_max_sq: float,
+            rep_e: float, contact_e: float) -> torch.Tensor:
+    e = torch.where(r2 < r_rep_sq, torch.full_like(r2, rep_e), torch.zeros_like(r2))
+    if contact_e != 0.0:
+        e = torch.where((r2 >= r_rep_sq) & (r2 < r_max_sq),
+                        torch.full_like(r2, contact_e), e)
+    return e
+
+
+def _all_beads_flat(ca, sg):
+    """Interleave [Ca0, SG0, Ca1, SG1, ...] -> [n_chains, 2N, 3]."""
+    n_chains, N, _ = ca.shape
+    flat = torch.empty(n_chains, 2 * N, 3, dtype=ca.dtype, device=ca.device)
+    flat[:, 0::2, :] = ca
+    flat[:, 1::2, :] = sg
+    return flat
+
+
+def batch_delta_e_torch(
+        old_ca, new_ca, old_sg, new_sg, n_moved,
+        chain_idx, bead_start,
+        ca_full, sg_full,
+        N, box,
+        r_rep_sq, r_max_sq, rep_e, contact_e,
+        min_caca, min_casg, min_sgsg,
+):
+    """Compute per-proposal delta-E by direct all-pairs evaluation.
+
+    For single-core simplicity we evaluate against ALL non-moved beads in
+    the same chain + ALL beads in other chains (no cell list — torch.cdist
+    is fast enough for the smoke-test sizes).
+    """
+    B = old_ca.shape[0]
+    device = old_ca.device
+    dtype = old_ca.dtype
+    inv_box = 1.0 / box
+    n_chains = ca_full.shape[0]
+
+    # Flatten Cα and SG separately to avoid mixed-type mask logic.
+    ca_flat = ca_full.reshape(-1, 3)            # [n_chains*N, 3]
+    sg_flat = sg_full.reshape(-1, 3)
+    delta_e = torch.zeros(B, dtype=dtype, device=device)
+
+    for b in range(B):
+        nm = int(n_moved[b].item())
+        if nm == 0:
+            continue
+        ci = int(chain_idx[b].item())
+        ms = int(bead_start[b].item())
+
+        old_ca_b = old_ca[b, :nm]    # [nm, 3]
+        new_ca_b = new_ca[b, :nm]
+        old_sg_b = old_sg[b, :nm]
+        new_sg_b = new_sg[b, :nm]
+        moved_residues = torch.arange(ms, ms + nm, device=device)
+
+        # All other Calpha beads (exclude moved residues from this chain).
+        all_ca_idx = torch.arange(n_chains * N, device=device)
+        ca_chain = all_ca_idx // N
+        ca_resid = all_ca_idx % N
+        # Build "skip" masks per pair-type using sequence separation.
+        # Calpha vs moved Calpha (range mod):
+        seq_diff = (ca_resid.unsqueeze(0) - moved_residues.unsqueeze(1)).abs()  # [nm, M]
+        skip_caca = (ca_chain.unsqueeze(0) == ci) & (seq_diff < min_caca)        # [nm, M]
+        # Mark moved Calpha residues themselves (always skip — they're being moved).
+        skip_self = (ca_chain.unsqueeze(0) == ci) & (
+            (ca_resid.unsqueeze(0) >= ms) & (ca_resid.unsqueeze(0) < ms + nm))
+        keep_caca = ~(skip_caca | skip_self)
+
+        # delta_e (Cα-Cα, moved Cα vs other Cα).
+        cv = ca_flat.unsqueeze(0)
+        d_old = cv - old_ca_b.unsqueeze(1)
+        d_old -= box * torch.round(d_old * inv_box)
+        r2_old = (d_old * d_old).sum(dim=-1)
+        d_new = cv - new_ca_b.unsqueeze(1)
+        d_new -= box * torch.round(d_new * inv_box)
+        r2_new = (d_new * d_new).sum(dim=-1)
+        e_old = (_zone_e(r2_old, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_caca).sum()
+        e_new = (_zone_e(r2_new, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_caca).sum()
+
+        # Calpha-SG (moved Cα vs all SG, excluding intra-residue and moved SG).
+        sg_chain = ca_chain
+        sg_resid = ca_resid
+        skip_casg = (sg_chain.unsqueeze(0) == ci) & (seq_diff < min_casg)
+        skip_self_sg = (sg_chain.unsqueeze(0) == ci) & (
+            (sg_resid.unsqueeze(0) >= ms) & (sg_resid.unsqueeze(0) < ms + nm))
+        keep_casg_a = ~(skip_casg | skip_self_sg)
+        sv = sg_flat.unsqueeze(0)
+        d_old_a = sv - old_ca_b.unsqueeze(1)
+        d_old_a -= box * torch.round(d_old_a * inv_box)
+        r2_old_a = (d_old_a * d_old_a).sum(dim=-1)
+        d_new_a = sv - new_ca_b.unsqueeze(1)
+        d_new_a -= box * torch.round(d_new_a * inv_box)
+        r2_new_a = (d_new_a * d_new_a).sum(dim=-1)
+        e_old += (_zone_e(r2_old_a, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_casg_a).sum()
+        e_new += (_zone_e(r2_new_a, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_casg_a).sum()
+
+        # Moved SG vs all Cα (same sequence rules).
+        d_old_b = cv - old_sg_b.unsqueeze(1)
+        d_old_b -= box * torch.round(d_old_b * inv_box)
+        r2_old_b = (d_old_b * d_old_b).sum(dim=-1)
+        d_new_b = cv - new_sg_b.unsqueeze(1)
+        d_new_b -= box * torch.round(d_new_b * inv_box)
+        r2_new_b = (d_new_b * d_new_b).sum(dim=-1)
+        e_old += (_zone_e(r2_old_b, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_casg_a).sum()
+        e_new += (_zone_e(r2_new_b, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_casg_a).sum()
+
+        # Moved SG vs all SG (excluding intra-residue and moved SG).
+        skip_sgsg = (sg_chain.unsqueeze(0) == ci) & (seq_diff < min_sgsg)
+        keep_sgsg = ~(skip_sgsg | skip_self_sg)
+        d_old_c = sv - old_sg_b.unsqueeze(1)
+        d_old_c -= box * torch.round(d_old_c * inv_box)
+        r2_old_c = (d_old_c * d_old_c).sum(dim=-1)
+        d_new_c = sv - new_sg_b.unsqueeze(1)
+        d_new_c -= box * torch.round(d_new_c * inv_box)
+        r2_new_c = (d_new_c * d_new_c).sum(dim=-1)
+        e_old += (_zone_e(r2_old_c, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_sgsg).sum()
+        e_new += (_zone_e(r2_new_c, r_rep_sq, r_max_sq, rep_e, contact_e) * keep_sgsg).sum()
+
+        delta_e[b] = e_new - e_old
+    return delta_e
+
+
+def delta_e_segment_b1(scratch, ca_t, sg_t, gs: int,
+                       N: int, n_chains: int, box: float,
+                       r_rep_sq, r_max_sq, rep_e, contact_e,
+                       min_caca, min_casg, min_sgsg):
+    """Single fused CUDA delta-E kernel for one segment (B=1).
+
+    All persistent tensors come from `scratch` with cached cupy views;
+    per-segment metadata (chain_idx, bead_start, n_moved_out) is sliced
+    in cupy land off pre-cached column views, so there are zero dlpack
+    conversions per call.
+    """
+    import cupy as cp
+    from . import cuda_kernels as ck
+
+    cp_de = scratch.cp("delta_e")
+    cp_ca = scratch.cp_state_ca(ca_t)
+    cp_sg = scratch.cp_state_sg(sg_t)
+    cp_old_ca = scratch.cp("old_ca")
+    cp_new_ca = scratch.cp("new_ca")
+    cp_old_sg = scratch.cp("old_sg")
+    cp_new_sg = scratch.cp("new_sg")
+    # n_moved comes from propose_batch_kernel output, not the meta column
+    cp_nm = scratch.cp("n_moved_out")
+    cp_ci = scratch.cp("col_chain")[gs:gs + 1]
+    cp_bs = scratch.cp("col_bead")[gs:gs + 1]
+
+    M = scratch.M
+    B = 1
+    block_dim = 256
+    block = (block_dim, 1, 1)
+    grid = (B, 1, 1)
+    smem = block_dim * 4
+    inv_box = 1.0 / box
+
+    kernel = ck.get_delta_e_kernel()
+    torch_stream = torch.cuda.current_stream(ca_t.device)
+    cp_stream = cp.cuda.ExternalStream(torch_stream.cuda_stream)
+    with cp_stream:
+        kernel(grid, block, (
+            cp_ca, cp_sg,
+            cp_old_ca, cp_new_ca, cp_old_sg, cp_new_sg,
+            cp_nm, cp_ci, cp_bs, cp_de,
+            np.int32(M), np.int32(B),
+            np.int32(n_chains), np.int32(N),
+            np.float32(box), np.float32(inv_box),
+            np.float32(r_rep_sq), np.float32(r_max_sq),
+            np.float32(rep_e), np.float32(contact_e),
+            np.int32(min_caca), np.int32(min_casg), np.int32(min_sgsg),
+        ), shared_mem=smem)
+
+    return scratch.delta_e
+
+
+def accept_segment_b1(scratch, ca_t, sg_t, gs: int, N: int, kBT: float):
+    """Apply Metropolis accept + writeback on the device.
+
+    Reads delta_e and the propose-output buffers, decides acceptance with
+    a pre-drawn random, mutates state.ca/state.sg in place if accepted,
+    and atomically updates the per-move-type counters in scratch.
+    """
+    import cupy as cp
+    from . import cuda_kernels as ck
+
+    cp_ca = scratch.cp_state_ca(ca_t)
+    cp_sg = scratch.cp_state_sg(sg_t)
+    cp_new_ca = scratch.cp("new_ca")
+    cp_new_sg = scratch.cp("new_sg")
+    cp_de = scratch.cp("delta_e")
+    cp_nm = scratch.cp("n_moved_out")
+    cp_mt = scratch.cp("move_type")
+    cp_ci = scratch.cp("col_chain")[gs:gs + 1]
+    cp_bs = scratch.cp("col_bead")[gs:gs + 1]
+    cp_ra = scratch.cp("rand_accept")[gs:gs + 1]
+    cp_att = scratch.cp("attempted_counts")
+    cp_acc = scratch.cp("accepted_counts")
+
+    M = scratch.M
+    B = 1
+    block = (32, 1, 1)
+    grid = (B, 1, 1)
+    inv_kBT = 1.0 / float(kBT)
+
+    kernel = ck.get_accept_kernel()
+    torch_stream = torch.cuda.current_stream(ca_t.device)
+    cp_stream = cp.cuda.ExternalStream(torch_stream.cuda_stream)
+    with cp_stream:
+        kernel(grid, block, (
+            cp_ca, cp_sg, cp_new_ca, cp_new_sg,
+            cp_de, cp_nm, cp_mt, cp_ci, cp_bs, cp_ra,
+            cp_att, cp_acc,
+            np.int32(M), np.int32(B), np.int32(N),
+            np.float32(inv_kBT),
+        ))
+
+
+def mc_sweep_kernel(scratch, ca_t, sg_t, n_segs: int,
+                    N: int, n_chains: int, box: float,
+                    max_angle: float, kBT: float,
+                    r_rep_sq, r_max_sq, rep_e, contact_e,
+                    min_caca, min_casg, min_sgsg) -> float:
+    """Single-launch mega-kernel: full sweep (all segments) in one block.
+
+    Eliminates per-segment Python dispatch and per-segment kernel launches.
+    The block iterates the precomputed permutation in scratch.perm_buf,
+    processing each segment through propose -> delta_e -> accept ->
+    writeback in shared memory + global state mutation.
+    """
+    import cupy as cp
+    from . import cuda_kernels as ck
+
+    cp_ca = scratch.cp_state_ca(ca_t)
+    cp_sg = scratch.cp_state_sg(sg_t)
+    cp_meta = scratch.cp("table_full")
+    cp_perm = scratch.cp("perm_buf")[:n_segs]
+    cp_ra = scratch.cp("rand_buf")
+    cp_rc = scratch.cp("rand_accept")
+    cp_att = scratch.cp("attempted_counts")
+    cp_acc = scratch.cp("accepted_counts")
+
+    M = scratch.M
+    block_dim = 256
+    block = (block_dim, 1, 1)
+    grid = (1, 1, 1)
+
+    # Shared mem layout (see cuda_kernels.py mc_sweep_kernel header):
+    #   5*M*3 + 8 (positions+headers) + block_dim (partial_de) + 1 (sh_accept)
+    smem_floats = 5 * M * 3 + 8 + block_dim + 1
+    smem_bytes = smem_floats * 4
+
+    inv_box = 1.0 / box
+    half_box = 0.5 * box
+    inv_kBT = 1.0 / float(kBT)
+
+    kernel = ck.get_mc_sweep_kernel()
+    if smem_bytes > 49152:
+        kernel.max_dynamic_shared_size_bytes = smem_bytes
+    torch_stream = torch.cuda.current_stream(ca_t.device)
+    cp_stream = cp.cuda.ExternalStream(torch_stream.cuda_stream)
+    evt_start = cp.cuda.Event()
+    evt_end = cp.cuda.Event()
+    with cp_stream:
+        evt_start.record()
+        kernel(grid, block, (
+            cp_ca, cp_sg,
+            cp_meta, cp_perm, cp_ra, cp_rc,
+            cp_att, cp_acc,
+            np.int32(n_segs), np.int32(N), np.int32(M), np.int32(n_chains),
+            np.float32(box), np.float32(inv_box), np.float32(half_box),
+            np.float32(max_angle), np.float32(inv_kBT),
+            np.float32(r_rep_sq), np.float32(r_max_sq),
+            np.float32(rep_e), np.float32(contact_e),
+            np.int32(min_caca), np.int32(min_casg), np.int32(min_sgsg),
+        ), shared_mem=smem_bytes)
+        evt_end.record()
+    evt_end.synchronize()
+    return float(cp.cuda.get_elapsed_time(evt_start, evt_end))
+
+
+def correction_matrix_torch(
+        old_ca, new_ca, old_sg, new_sg, n_moved,
+        chain_idx, bead_start, N, box,
+        r_rep_sq, r_max_sq, rep_e, contact_e,
+        min_caca, min_casg, min_sgsg,
+):
+    """Dense BxB upper-triangular rank-1 correction.
+
+    Computed pair-wise; each surviving (i, j) does the 4 cross-energies
+    (E00 + E11 - E01 - E10) over the 2*nm_i x 2*nm_j moved beads.
+    """
+    B = old_ca.shape[0]
+    device = old_ca.device
+    dtype = old_ca.dtype
+    inv_box = 1.0 / box
+    corr = torch.zeros(B, B, dtype=dtype, device=device)
+
+    def _pair_e(p1, p2, mask):
+        d = p2.unsqueeze(0) - p1.unsqueeze(1)
+        d -= box * torch.round(d * inv_box)
+        r2 = (d * d).sum(dim=-1)
+        return (_zone_e(r2, r_rep_sq, r_max_sq, rep_e, contact_e) * mask).sum()
+
+    for i in range(B):
+        nm_i = int(n_moved[i].item())
+        if nm_i == 0:
+            continue
+        ci = int(chain_idx[i].item())
+        ms_i = int(bead_start[i].item())
+        for j in range(i + 1, B):
+            nm_j = int(n_moved[j].item())
+            if nm_j == 0:
+                continue
+            cj = int(chain_idx[j].item())
+            ms_j = int(bead_start[j].item())
+            ri = torch.arange(ms_i, ms_i + nm_i, device=device)
+            rj = torch.arange(ms_j, ms_j + nm_j, device=device)
+            seq = (ri.unsqueeze(1) - rj.unsqueeze(0)).abs()
+            same_chain = (ci == cj)
+            skip_caca = (seq < min_caca) if same_chain else torch.zeros_like(seq, dtype=torch.bool)
+            skip_casg = (seq < min_casg) if same_chain else torch.zeros_like(seq, dtype=torch.bool)
+            skip_sgsg = (seq < min_sgsg) if same_chain else torch.zeros_like(seq, dtype=torch.bool)
+            keep_caca = (~skip_caca).to(dtype)
+            keep_casg = (~skip_casg).to(dtype)
+            keep_sgsg = (~skip_sgsg).to(dtype)
+
+            # Cα-Cα
+            e00 = _pair_e(old_ca[i, :nm_i], old_ca[j, :nm_j], keep_caca)
+            e01 = _pair_e(old_ca[i, :nm_i], new_ca[j, :nm_j], keep_caca)
+            e10 = _pair_e(new_ca[i, :nm_i], old_ca[j, :nm_j], keep_caca)
+            e11 = _pair_e(new_ca[i, :nm_i], new_ca[j, :nm_j], keep_caca)
+            # Cα(i) vs SG(j)
+            e00 += _pair_e(old_ca[i, :nm_i], old_sg[j, :nm_j], keep_casg)
+            e01 += _pair_e(old_ca[i, :nm_i], new_sg[j, :nm_j], keep_casg)
+            e10 += _pair_e(new_ca[i, :nm_i], old_sg[j, :nm_j], keep_casg)
+            e11 += _pair_e(new_ca[i, :nm_i], new_sg[j, :nm_j], keep_casg)
+            # SG(i) vs Cα(j)
+            e00 += _pair_e(old_sg[i, :nm_i], old_ca[j, :nm_j], keep_casg)
+            e01 += _pair_e(old_sg[i, :nm_i], new_ca[j, :nm_j], keep_casg)
+            e10 += _pair_e(new_sg[i, :nm_i], old_ca[j, :nm_j], keep_casg)
+            e11 += _pair_e(new_sg[i, :nm_i], new_ca[j, :nm_j], keep_casg)
+            # SG-SG
+            e00 += _pair_e(old_sg[i, :nm_i], old_sg[j, :nm_j], keep_sgsg)
+            e01 += _pair_e(old_sg[i, :nm_i], new_sg[j, :nm_j], keep_sgsg)
+            e10 += _pair_e(new_sg[i, :nm_i], old_sg[j, :nm_j], keep_sgsg)
+            e11 += _pair_e(new_sg[i, :nm_i], new_sg[j, :nm_j], keep_sgsg)
+            corr[i, j] = (e11 - e01) - (e10 - e00)
+    return corr
+
+
+# ---------------------------------------------------------------------------
+# Fully vectorised (no per-batch Python loop) delta-E + correction matrix.
+# Ported from the py_torch_gpu_fused multistep app — these are the hot-path
+# implementations; the loop-based `batch_delta_e_torch` / `correction_matrix_torch`
+# above are kept only for the synthetic-checklist tests.
+# ---------------------------------------------------------------------------
+
+_USE_COMPILE = os.environ.get("ROUSE_NO_TORCH_COMPILE", "0") != "1"
+_COMPILE_MODE = os.environ.get("ROUSE_TORCH_COMPILE_MODE", "inductor").lower()
+
+
+def _batch_delta_e_torch_fused_eager(
+        old_ca, new_ca, old_sg, new_sg, n_moved_out,
+        chain_idx, bead_start,
+        ca_full, sg_full,
+        N, box,
+        r_rep_sq, r_max_sq, rep_e, contact_e,
+        min_caca, min_casg, min_sgsg,
+):
+    """Fused delta_E across all B proposals — single batched tensor op.
+
+    Shapes:
+      old_ca, new_ca, old_sg, new_sg : (B, M, 3)   torch float on CUDA
+      n_moved_out, chain_idx, bead_start : (B,)    torch long on CUDA
+      ca_full, sg_full              : (n_chains, N, 3) torch float on CUDA
+    Returns delta_e: (B,) on CUDA.
+    """
+    B, M, _ = old_ca.shape
+    device = old_ca.device
+    dtype = old_ca.dtype
+    inv_box = 1.0 / box
+    n_chains = ca_full.shape[0]
+    NK = n_chains * N
+
+    k_range = torch.arange(M, device=device).unsqueeze(0)
+    lane_valid = k_range < n_moved_out.unsqueeze(1)
+    lane_valid_f = lane_valid.reshape(B * M)
+
+    bead_resid = bead_start.unsqueeze(1) + k_range
+    moved_chain = chain_idx.unsqueeze(1).expand(B, M)
+    moved_chain_f = moved_chain.reshape(B * M)
+    moved_resid_f = bead_resid.reshape(B * M)
+
+    moved_ca_old = old_ca.reshape(B * M, 3)
+    moved_ca_new = new_ca.reshape(B * M, 3)
+    moved_sg_old = old_sg.reshape(B * M, 3)
+    moved_sg_new = new_sg.reshape(B * M, 3)
+
+    ca_flat = ca_full.reshape(NK, 3)
+    sg_flat = sg_full.reshape(NK, 3)
+    ref_idx = torch.arange(NK, device=device)
+    ref_chain = ref_idx // N
+    ref_resid = ref_idx % N
+
+    same_chain = moved_chain_f.unsqueeze(1) == ref_chain.unsqueeze(0)
+    seq_diff = (moved_resid_f.unsqueeze(1) - ref_resid.unsqueeze(0)).abs()
+
+    seg_start_f = (bead_start.unsqueeze(1).expand(B, M).reshape(B * M)).unsqueeze(1)
+    seg_end_f = ((bead_start + n_moved_out).unsqueeze(1).expand(B, M).reshape(B * M)).unsqueeze(1)
+    in_moved_span = (ref_resid.unsqueeze(0) >= seg_start_f) & \
+                    (ref_resid.unsqueeze(0) < seg_end_f)
+    self_excl = same_chain & in_moved_span
+
+    skip_caca = same_chain & (seq_diff < min_caca)
+    skip_casg = same_chain & (seq_diff < min_casg)
+    skip_sgsg = same_chain & (seq_diff < min_sgsg)
+
+    keep_caca = (~(skip_caca | self_excl)) & lane_valid_f.unsqueeze(1)
+    keep_casg = (~(skip_casg | self_excl)) & lane_valid_f.unsqueeze(1)
+    keep_sgsg = (~(skip_sgsg | self_excl)) & lane_valid_f.unsqueeze(1)
+    m_caca = keep_caca.to(dtype)
+    m_casg = keep_casg.to(dtype)
+    m_sgsg = keep_sgsg.to(dtype)
+
+    moved_all = torch.cat([moved_ca_old, moved_ca_new, moved_sg_old, moved_sg_new], dim=0)
+    ref_all = torch.cat([ca_flat, sg_flat], dim=0)
+    d = ref_all.unsqueeze(0) - moved_all.unsqueeze(1)
+    d = d - box * torch.round(d * inv_box)
+    r2_big = (d * d).sum(dim=-1)
+    e_big = _zone_e(r2_big, r_rep_sq, r_max_sq, rep_e, contact_e)
+
+    BM = B * M
+    e_caca_old = (e_big[:BM, :NK] * m_caca).sum(dim=1)
+    e_casg_a_old = (e_big[:BM, NK:] * m_casg).sum(dim=1)
+    e_caca_new = (e_big[BM:2 * BM, :NK] * m_caca).sum(dim=1)
+    e_casg_a_new = (e_big[BM:2 * BM, NK:] * m_casg).sum(dim=1)
+    e_casg_b_old = (e_big[2 * BM:3 * BM, :NK] * m_casg).sum(dim=1)
+    e_sgsg_old = (e_big[2 * BM:3 * BM, NK:] * m_sgsg).sum(dim=1)
+    e_casg_b_new = (e_big[3 * BM:4 * BM, :NK] * m_casg).sum(dim=1)
+    e_sgsg_new = (e_big[3 * BM:4 * BM, NK:] * m_sgsg).sum(dim=1)
+
+    e_lane_old = e_caca_old + e_casg_a_old + e_casg_b_old + e_sgsg_old
+    e_lane_new = e_caca_new + e_casg_a_new + e_casg_b_new + e_sgsg_new
+
+    delta_lane = e_lane_new - e_lane_old
+    delta_e = delta_lane.reshape(B, M).sum(dim=1)
+    return delta_e
+
+
+try:
+    import torch._dynamo as _dynamo
+    _dynamo.config.suppress_errors = True
+except Exception:
+    pass
+
+
+def _resolve_compiled():
+    fn = _batch_delta_e_torch_fused_eager
+    if not _USE_COMPILE or _COMPILE_MODE == "eager":
+        return fn
+    if _COMPILE_MODE == "script":
+        try:
+            return torch.jit.script(fn)
+        except Exception:
+            return fn
+    try:
+        if _COMPILE_MODE == "aot_eager":
+            return torch.compile(fn, backend="aot_eager", fullgraph=False, dynamic=False)
+        if _COMPILE_MODE == "max-autotune":
+            return torch.compile(fn, mode="max-autotune", fullgraph=False, dynamic=False)
+        return torch.compile(fn, mode="reduce-overhead", fullgraph=False, dynamic=False)
+    except Exception:
+        return fn
+
+
+batch_delta_e_torch_fused = _resolve_compiled()
+
+
+def _correction_matrix_torch_fused_eager(
+        old_ca, new_ca, old_sg, new_sg, n_moved,
+        chain_idx, bead_start, N, box,
+        r_rep_sq, r_max_sq, rep_e, contact_e,
+        min_caca, min_casg, min_sgsg,
+):
+    """Fully vectorised rank-1 EMM correction matrix — one (B, B) batched op."""
+    B, M, _ = old_ca.shape
+    device = old_ca.device
+    dtype = old_ca.dtype
+    inv_box = 1.0 / box
+
+    moved_ca = torch.cat([old_ca, new_ca], dim=1)  # (B, 2M, 3)
+    moved_sg = torch.cat([old_sg, new_sg], dim=1)
+
+    k_axis = torch.arange(2 * M, device=device)
+    k_local = k_axis % M
+    lane_valid = k_local.unsqueeze(0) < n_moved.unsqueeze(1)        # (B, 2M)
+
+    resid = bead_start.unsqueeze(1) + k_local.unsqueeze(0)          # (B, 2M)
+
+    half_idx = (k_axis >= M).to(torch.long)
+    sgn = torch.where(half_idx.unsqueeze(0) == half_idx.unsqueeze(1),
+                      torch.ones((2 * M, 2 * M), device=device, dtype=dtype),
+                      -torch.ones((2 * M, 2 * M), device=device, dtype=dtype))
+
+    same_chain = chain_idx.unsqueeze(1) == chain_idx.unsqueeze(0)   # (B, B)
+    seq_diff = (resid.unsqueeze(1).unsqueeze(3)
+                - resid.unsqueeze(0).unsqueeze(2)).abs()            # (B, B, 2M, 2M)
+
+    skip_caca = same_chain.unsqueeze(-1).unsqueeze(-1) & (seq_diff < min_caca)
+    skip_casg = same_chain.unsqueeze(-1).unsqueeze(-1) & (seq_diff < min_casg)
+    skip_sgsg = same_chain.unsqueeze(-1).unsqueeze(-1) & (seq_diff < min_sgsg)
+
+    lane_pair = lane_valid.unsqueeze(1).unsqueeze(3) & \
+                lane_valid.unsqueeze(0).unsqueeze(2)                # (B, B, 2M, 2M)
+
+    keep_caca = (~skip_caca) & lane_pair
+    keep_casg = (~skip_casg) & lane_pair
+    keep_sgsg = (~skip_sgsg) & lane_pair
+
+    def _pair_zone(moved_a, moved_b):
+        d = moved_b.unsqueeze(0).unsqueeze(2) - moved_a.unsqueeze(1).unsqueeze(3)
+        d = d - box * torch.round(d * inv_box)
+        r2 = (d * d).sum(dim=-1)                                    # (B, B, 2M, 2M)
+        e = torch.where(r2 < r_rep_sq,
+                        torch.full_like(r2, rep_e),
+                        torch.zeros_like(r2))
+        if contact_e != 0.0:
+            e = torch.where((r2 >= r_rep_sq) & (r2 < r_max_sq),
+                            torch.full_like(r2, contact_e), e)
+        return e
+
+    e_caca = _pair_zone(moved_ca, moved_ca)
+    e_casg = _pair_zone(moved_ca, moved_sg)
+    e_sgca = _pair_zone(moved_sg, moved_ca)
+    e_sgsg = _pair_zone(moved_sg, moved_sg)
+
+    sgn_b = sgn.unsqueeze(0).unsqueeze(0)                           # (1,1,2M,2M)
+    weighted = (e_caca * keep_caca.to(dtype) * sgn_b
+                + e_casg * keep_casg.to(dtype) * sgn_b
+                + e_sgca * keep_casg.to(dtype) * sgn_b
+                + e_sgsg * keep_sgsg.to(dtype) * sgn_b)
+    corr_full = weighted.sum(dim=(-1, -2))                          # (B, B)
+
+    eye = torch.eye(B, device=device, dtype=torch.bool)
+    corr_full = corr_full.masked_fill(eye, 0.0)
+    return corr_full
+
+
+correction_matrix_torch_fused = _correction_matrix_torch_fused_eager
+
+
+# ---------------------------------------------------------------------------
+# Streamed CUDA-C batched delta-E (g1m_ccx optimization, Workstream A).
+# Launches delta_e_segment_kernel with grid=(B,1,1): each block streams the
+# N*K reference dimension with register accumulation + shared-mem reduction.
+# Bounded memory, whole-grid parallelism — replaces the torch path's dense
+# (4*B*M, 2*N*K) materialization that pins one big tensor per batch.
+# ---------------------------------------------------------------------------
+
+def batch_delta_e_cuda(
+        old_ca, new_ca, old_sg, new_sg, n_moved_out,
+        chain_idx, bead_start,
+        ca_full, sg_full,
+        N, box,
+        r_rep_sq, r_max_sq, rep_e, contact_e,
+        min_caca, min_casg, min_sgsg,
+):
+    """Drop-in replacement for `batch_delta_e_torch_fused` — streamed CUDA-C.
+
+    Same signature/semantics; dispatches the hand-written
+    `delta_e_segment_kernel` (one block per proposal) instead of the torch
+    dense all-pairs op. Returns delta_e: (B,) float32 on CUDA.
+    """
+    import cupy as cp
+    from . import cuda_kernels as ck
+    from .proposer import _torch_to_cupy
+
+    B, M, _ = old_ca.shape
+    device = old_ca.device
+    n_chains = ca_full.shape[0]
+    inv_box = 1.0 / box
+
+    delta_e = torch.zeros(B, dtype=torch.float32, device=device)
+
+    ca_flat = ca_full.contiguous().view(-1)
+    sg_flat = sg_full.contiguous().view(-1)
+    old_ca_flat = old_ca.contiguous().view(-1)
+    new_ca_flat = new_ca.contiguous().view(-1)
+    old_sg_flat = old_sg.contiguous().view(-1)
+    new_sg_flat = new_sg.contiguous().view(-1)
+    nm_t = n_moved_out.contiguous().to(torch.int64)
+    ci_t = chain_idx.contiguous().to(torch.int64)
+    bs_t = bead_start.contiguous().to(torch.int64)
+
+    cp_ca = _torch_to_cupy(ca_flat)
+    cp_sg = _torch_to_cupy(sg_flat)
+    cp_old_ca = _torch_to_cupy(old_ca_flat)
+    cp_new_ca = _torch_to_cupy(new_ca_flat)
+    cp_old_sg = _torch_to_cupy(old_sg_flat)
+    cp_new_sg = _torch_to_cupy(new_sg_flat)
+    cp_nm = _torch_to_cupy(nm_t)
+    cp_ci = _torch_to_cupy(ci_t)
+    cp_bs = _torch_to_cupy(bs_t)
+    cp_de = _torch_to_cupy(delta_e)
+
+    block_dim = 256
+    block = (block_dim, 1, 1)
+    grid = (max(B, 1), 1, 1)
+    smem = block_dim * 4
+
+    kernel = ck.get_delta_e_kernel()
+    torch_stream = torch.cuda.current_stream(device)
+    cp_stream = cp.cuda.ExternalStream(torch_stream.cuda_stream)
+    with cp_stream:
+        kernel(grid, block, (
+            cp_ca, cp_sg,
+            cp_old_ca, cp_new_ca, cp_old_sg, cp_new_sg,
+            cp_nm, cp_ci, cp_bs, cp_de,
+            np.int32(M), np.int32(B),
+            np.int32(n_chains), np.int32(N),
+            np.float32(box), np.float32(inv_box),
+            np.float32(r_rep_sq), np.float32(r_max_sq),
+            np.float32(rep_e), np.float32(contact_e),
+            np.int32(min_caca), np.int32(min_casg), np.int32(min_sgsg),
+        ), shared_mem=smem)
+    return delta_e
+
+
+def correction_matrix_cuda(
+        old_ca, new_ca, old_sg, new_sg, n_moved,
+        chain_idx, bead_start, N, box,
+        r_rep_sq, r_max_sq, rep_e, contact_e,
+        min_caca, min_casg, min_sgsg,
+):
+    """Drop-in replacement for `correction_matrix_torch_fused` — streamed CUDA-C.
+
+    Same signature/semantics; dispatches a bounding-sphere prelude
+    (`corr_bounds_kernel`) then `correction_pairs_kernel` (one block per (i,j)
+    pair, exact bounding-sphere prefilter) instead of the dense
+    (B,B,2M,2M) torch tensor. Returns corr: (B,B) float32 on CUDA,
+    upper-triangular (the host accept loop only reads corr[i,j], j>i).
+    """
+    import cupy as cp
+    from . import cuda_kernels as ck
+    from .proposer import _torch_to_cupy
+
+    B, M, _ = old_ca.shape
+    device = old_ca.device
+    inv_box = 1.0 / box
+    cutoff = float(np.sqrt(r_max_sq if contact_e != 0.0 else r_rep_sq))
+
+    corr = torch.zeros(B, B, dtype=torch.float32, device=device)
+    ref = torch.zeros(B, 3, dtype=torch.float32, device=device)
+    radius = torch.zeros(B, dtype=torch.float32, device=device)
+
+    old_ca_flat = old_ca.contiguous().view(-1)
+    new_ca_flat = new_ca.contiguous().view(-1)
+    old_sg_flat = old_sg.contiguous().view(-1)
+    new_sg_flat = new_sg.contiguous().view(-1)
+    nm_t = n_moved.contiguous().to(torch.int64)
+    ci_t = chain_idx.contiguous().to(torch.int64)
+    bs_t = bead_start.contiguous().to(torch.int64)
+
+    cp_old_ca = _torch_to_cupy(old_ca_flat)
+    cp_new_ca = _torch_to_cupy(new_ca_flat)
+    cp_old_sg = _torch_to_cupy(old_sg_flat)
+    cp_new_sg = _torch_to_cupy(new_sg_flat)
+    cp_nm = _torch_to_cupy(nm_t)
+    cp_ci = _torch_to_cupy(ci_t)
+    cp_bs = _torch_to_cupy(bs_t)
+    cp_ref = _torch_to_cupy(ref.view(-1))
+    cp_rad = _torch_to_cupy(radius)
+    cp_corr = _torch_to_cupy(corr.view(-1))
+
+    block_dim = 128
+    block = (block_dim, 1, 1)
+    smem = block_dim * 4
+
+    bounds_kernel = ck.get_corr_bounds_kernel()
+    pairs_kernel = ck.get_corr_pairs_kernel()
+    torch_stream = torch.cuda.current_stream(device)
+    cp_stream = cp.cuda.ExternalStream(torch_stream.cuda_stream)
+    with cp_stream:
+        bounds_kernel((max(B, 1), 1, 1), block, (
+            cp_old_ca, cp_new_ca, cp_old_sg, cp_new_sg,
+            cp_nm, cp_ref, cp_rad,
+            np.int32(M), np.int32(B),
+            np.float32(box), np.float32(inv_box),
+        ), shared_mem=smem)
+        pairs_kernel((max(B, 1), max(B, 1), 1), block, (
+            cp_old_ca, cp_new_ca, cp_old_sg, cp_new_sg,
+            cp_nm, cp_ci, cp_bs, cp_ref, cp_rad, cp_corr,
+            np.int32(M), np.int32(B),
+            np.float32(box), np.float32(inv_box),
+            np.float32(r_rep_sq), np.float32(r_max_sq),
+            np.float32(rep_e), np.float32(contact_e),
+            np.float32(cutoff),
+            np.int32(min_caca), np.int32(min_casg), np.int32(min_sgsg),
+        ), shared_mem=smem)
+    return corr
+
+
+def causal_accept_cuda(
+        ca_t, sg_t, new_ca, new_sg, delta_e, corr,
+        n_moved, move_type, chain_idx, bead_start, uniforms,
+        attempted_acc, accepted_acc,
+        M, B, N, inv_kBT,
+):
+    """On-GPU causal Metropolis accept + scatter (g1m_ccx, Workstream C).
+
+    Single-block `causal_accept_kernel`: sequential over proposal i (the
+    rank-1 EMM causal dependency), parallel delta_e[j]+=corr[i,j] and
+    accepted-move writeback into `ca_t`/`sg_t`. Eliminates the host-side
+    `_fused_accept` loop and the per-batch delta_e/corr GPU->host round-trip.
+    `attempted_acc`/`accepted_acc` are [3] int64 GPU tensors accumulated in
+    place across the sweep.
+    """
+    import cupy as cp
+    from . import cuda_kernels as ck
+    from .proposer import _torch_to_cupy
+
+    device = ca_t.device
+
+    cp_ca = _torch_to_cupy(ca_t.contiguous().view(-1))
+    cp_sg = _torch_to_cupy(sg_t.contiguous().view(-1))
+    cp_new_ca = _torch_to_cupy(new_ca.contiguous().view(-1))
+    cp_new_sg = _torch_to_cupy(new_sg.contiguous().view(-1))
+    cp_de = _torch_to_cupy(delta_e.contiguous().view(-1))
+    cp_corr = _torch_to_cupy(corr.contiguous().view(-1))
+    cp_nm = _torch_to_cupy(n_moved.contiguous().to(torch.int64))
+    cp_mt = _torch_to_cupy(move_type.contiguous().to(torch.int64))
+    cp_ci = _torch_to_cupy(chain_idx.contiguous().to(torch.int64))
+    cp_bs = _torch_to_cupy(bead_start.contiguous().to(torch.int64))
+    cp_u = _torch_to_cupy(uniforms.contiguous().to(torch.float32))
+    cp_att = _torch_to_cupy(attempted_acc.contiguous().view(-1))
+    cp_acc = _torch_to_cupy(accepted_acc.contiguous().view(-1))
+
+    block = (128, 1, 1)
+    grid = (1, 1, 1)
+
+    kernel = ck.get_causal_accept_kernel()
+    torch_stream = torch.cuda.current_stream(device)
+    cp_stream = cp.cuda.ExternalStream(torch_stream.cuda_stream)
+    with cp_stream:
+        kernel(grid, block, (
+            cp_ca, cp_sg, cp_new_ca, cp_new_sg,
+            cp_de, cp_corr, cp_nm, cp_mt, cp_ci, cp_bs, cp_u,
+            cp_att, cp_acc,
+            np.int32(M), np.int32(B), np.int32(N), np.float32(inv_kBT),
+        ))
