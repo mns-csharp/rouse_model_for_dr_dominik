@@ -78,7 +78,7 @@ PAIRS = [
 ]
 
 # output folder: user-specified exact name
-OUT = REPO.parent / "rouse_python_benchmark_hinge_opt_2026-05-14_190902"
+OUT = REPO.parents[1] / "05_benchmarks" / "hinge_opt_series" / "rouse_python_benchmark_hinge_opt_2026-05-14_190902"
 RUNS = OUT / "_runs"
 LOG = OUT / "bench_K_verify_log.txt"
 

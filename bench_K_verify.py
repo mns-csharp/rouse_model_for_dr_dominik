@@ -69,7 +69,7 @@ PAIRS = [
 ]
 
 # output folder: user-specified prefix + seconds-at-start
-OUT = REPO.parent / f"rouse_python_benchmark_hinge_opt_2026-05-14_1151{time.strftime('%S')}"
+OUT = REPO.parents[1] / "05_benchmarks" / "hinge_opt_series" / f"rouse_python_benchmark_hinge_opt_2026-05-14_1151{time.strftime('%S')}"
 RUNS = OUT / "_runs"
 LOG = OUT / "bench_K_verify_log.txt"
 

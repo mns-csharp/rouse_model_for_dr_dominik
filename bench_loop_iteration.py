@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(r"D:\git\rouse_model_python_independent_apps")
+REPO_ROOT = Path(r"D:\git\RouseModel\01_engines\rouse_model_python_independent_apps")
 SRC = REPO_ROOT / "src"
 BENCH_DIR = REPO_ROOT / "benchmark_data"
 RUNS_DIR = BENCH_DIR / "_runs"

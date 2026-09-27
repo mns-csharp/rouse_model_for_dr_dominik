@@ -66,7 +66,7 @@ python -m g1c_ptg_gpu_single_thread_conventional_mc_py_torch_gpu_fused.main --N 
 ## Benchmark
 
 The authoritative current benchmark is the run delivered in
-`D:\git\rouse_python_benchmark_hinge_opt_2026-05-14_003001\` — 25 apps ×
+`D:\git\RouseModel\05_benchmarks\hinge_opt_series\rouse_python_benchmark_hinge_opt_2026-05-14_003001\` — 25 apps ×
 N ∈ {25, 50, 100} × K = 20, eq = prod = 100, seed = 42, phi = 0.01. See its
 `README.md`, `benchmark.md`, `results.tsv`, and `tables.md` for the full
 results.
